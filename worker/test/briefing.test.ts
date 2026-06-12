@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { dustFor, buildMessage, gradePm10 } from "../src/briefing";
+import { dustFor, buildMessage, gradePm10, rotateByDate } from "../src/briefing";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -7,6 +7,20 @@ const DUST = {
   stations: { "강남구": { pm10: 40, pm25: 20 } },
   avg: { pm10: 55, pm25: 30 },
 };
+
+describe("rotateByDate", () => {
+  it("빈 배열은 그대로", () => {
+    expect(rotateByDate([], new Date("2026-06-12T22:00:00Z"))).toEqual([]);
+  });
+  it("날짜에 따라 시작 지점이 회전", () => {
+    const items = [0, 1, 2, 3, 4];
+    const a = rotateByDate(items, new Date("2026-06-12T22:00:00Z"));
+    const b = rotateByDate(items, new Date("2026-06-13T22:00:00Z"));
+    // 같은 원소 집합이지만 다음 날은 시작점이 1칸 이동
+    expect([...a].sort()).toEqual([0, 1, 2, 3, 4]);
+    expect(a[0]).not.toBe(b[0]);
+  });
+});
 
 describe("dustFor", () => {
   it("측정소 매칭되면 그 값", () => {

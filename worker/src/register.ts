@@ -16,6 +16,7 @@ function help(region: string): string {
 }
 
 export async function handleMessage(env: Env, msg: TgMessage): Promise<void> {
+  if (msg.chat?.id === undefined) return; // 비정상 업데이트 방어
   const token = env.TELEGRAM_BOT_TOKEN;
   const chatId = String(msg.chat.id);
   const text = (msg.text || "").trim();
@@ -40,6 +41,7 @@ export async function handleMessage(env: Env, msg: TgMessage): Promise<void> {
 }
 
 export async function handleCallback(env: Env, cq: TgCallback): Promise<void> {
+  if (cq.message?.chat?.id === undefined) return; // 비정상 업데이트 방어
   const token = env.TELEGRAM_BOT_TOKEN;
   const data = cq.data || "";
   const chatId = String(cq.message.chat.id);

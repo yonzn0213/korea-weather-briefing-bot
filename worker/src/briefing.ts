@@ -156,15 +156,26 @@ export function buildMessage(now: Date, sido: string, sigungu: string, w: Weathe
   return lines.join("\n");
 }
 
+// 한도 도달 시 매일 같은 유저가 밀리지 않도록, 날짜 기반으로 처리 순서를 회전한다
+export function rotateByDate<T>(items: T[], now: Date): T[] {
+  if (items.length === 0) return items;
+  const kst = toKst(now);
+  const start = Date.UTC(kst.getUTCFullYear(), 0, 1);
+  const today = Date.UTC(kst.getUTCFullYear(), kst.getUTCMonth(), kst.getUTCDate());
+  const dayOfYear = Math.floor((today - start) / 86400000);
+  const offset = dayOfYear % items.length;
+  return items.slice(offset).concat(items.slice(0, offset));
+}
+
 export async function runBriefing(env: Env, now: Date): Promise<{ sent: number; failed: number; skipped: number }> {
-  const users = await listUsers(env);
+  const ordered = rotateByDate(await listUsers(env), now);
   const weatherCache = new Map<string, Weather | null>();
   const dustCache = new Map<string, Dust | null>();
   let subreq = 0;
   let sent = 0, failed = 0, skipped = 0;
 
-  for (let i = 0; i < users.length; i++) {
-    const { chatId, user } = users[i];
+  for (let i = 0; i < ordered.length; i++) {
+    const { chatId, user } = ordered[i];
     const { sido, sigungu } = user;
     if (!REGIONS[sido] || !REGIONS[sido].sigungu[sigungu]) continue;
 
@@ -174,7 +185,7 @@ export async function runBriefing(env: Env, now: Date): Promise<{ sent: number; 
 
     const need = (weatherCache.has(gridKey) ? 0 : 1) + (dustCache.has(airkorea) ? 0 : 1) + 1;
     if (subreq + need > MAX_SUBREQUESTS) {
-      skipped = users.length - i;
+      skipped = ordered.length - i;
       console.warn(`subrequest 예산 도달: ${skipped}명 이번 회차 건너뜀`);
       break;
     }
