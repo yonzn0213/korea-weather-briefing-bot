@@ -13,19 +13,20 @@ STATE_FILE = Path(__file__).parent / "state.json"
 SERVICE_KEY = os.environ["DATA_GO_KR_KEY"]
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
-# 서울 25개 구: 기상청 단기예보 격자좌표 (nx, ny)
-# 에어코리아 서울 측정소 이름은 구 이름과 동일
-REGIONS = {
-    "종로구": (60, 127), "중구": (60, 127), "용산구": (60, 126),
-    "성동구": (61, 127), "광진구": (62, 126), "동대문구": (61, 127),
-    "중랑구": (62, 128), "성북구": (61, 127), "강북구": (61, 128),
-    "도봉구": (61, 129), "노원구": (61, 129), "은평구": (59, 127),
-    "서대문구": (59, 127), "마포구": (59, 127), "양천구": (58, 126),
-    "강서구": (58, 126), "구로구": (58, 125), "금천구": (59, 124),
-    "영등포구": (58, 126), "동작구": (59, 125), "관악구": (59, 125),
-    "서초구": (61, 125), "강남구": (61, 126), "송파구": (62, 126),
-    "강동구": (62, 126),
-}
+REGIONS_FILE = Path(__file__).parent / "regions.json"
+
+
+def load_regions() -> dict:
+    return json.loads(REGIONS_FILE.read_text(encoding="utf-8"))
+
+
+# 시도 -> {airkorea, sigungu:{name:{nx,ny}}}. 삽입 순서가 콜백 인덱스 기준.
+REGIONS = load_regions()
+SIDO_LIST = list(REGIONS.keys())
+
+
+def sigungu_names(sido: str) -> list:
+    return list(REGIONS[sido]["sigungu"].keys())
 
 
 # ---------- 상태(유저 목록 + 텔레그램 offset) ----------
@@ -58,11 +59,27 @@ def send_message(chat_id, text: str, **kwargs):
                               "parse_mode": "HTML", **kwargs})
 
 
-def region_keyboard() -> dict:
-    """25개 구를 3열 인라인 키보드로"""
-    names = list(REGIONS)
-    rows = [
-        [{"text": n, "callback_data": f"r:{n}"} for n in names[i:i + 3]]
-        for i in range(0, len(names), 3)
-    ]
+def _rows(buttons: list, cols: int = 3) -> list:
+    return [buttons[i:i + cols] for i in range(0, len(buttons), cols)]
+
+
+def sido_keyboard() -> dict:
+    buttons = [{"text": s, "callback_data": f"s:{i}"}
+               for i, s in enumerate(SIDO_LIST)]
+    return {"inline_keyboard": _rows(buttons)}
+
+
+def sigungu_keyboard(sido_idx: int) -> dict:
+    sido = SIDO_LIST[sido_idx]
+    names = sigungu_names(sido)
+    buttons = [{"text": n, "callback_data": f"r:{sido_idx}:{j}"}
+               for j, n in enumerate(names)]
+    rows = _rows(buttons)
+    rows.append([{"text": "⬅ 뒤로", "callback_data": "s:back"}])
     return {"inline_keyboard": rows}
+
+
+def resolve_region(sido_idx: int, sigungu_idx: int) -> tuple:
+    sido = SIDO_LIST[sido_idx]          # 범위 밖이면 IndexError
+    names = sigungu_names(sido)
+    return sido, names[sigungu_idx]     # 범위 밖이면 IndexError
