@@ -57,12 +57,12 @@ def fetch_weather(now: datetime, nx: int, ny: int) -> dict:
 
 # ---------- 에어코리아 미세먼지 ----------
 
-def fetch_dust_all() -> dict:
-    """서울 전 측정소 데이터를 한 번에 가져와 구 이름 -> 측정값 매핑"""
+def fetch_dust(sido_name: str) -> dict:
+    """해당 시/도 전 측정소를 한 번에 가져와 측정소명 -> 측정값 매핑"""
     url = "http://apis.data.go.kr/B552584/ArpltnInforInqireSvc/getCtprvnRltmMesureDnsty"
     params = {
         "serviceKey": SERVICE_KEY, "returnType": "json",
-        "numOfRows": 100, "pageNo": 1, "sidoName": "서울", "ver": "1.0",
+        "numOfRows": 1000, "pageNo": 1, "sidoName": sido_name, "ver": "1.0",
     }
     r = requests.get(url, params=params, timeout=20)
     r.raise_for_status()
@@ -74,7 +74,7 @@ def fetch_dust_all() -> dict:
         for key, bucket in (("pm10Value", pm10s), ("pm25Value", pm25s)):
             try:
                 v = float(it[key])
-                entry[key[:4] if key.startswith("pm10") else "pm25"] = v
+                entry["pm10" if key.startswith("pm10") else "pm25"] = v
                 bucket.append(v)
             except (ValueError, TypeError):
                 pass
@@ -88,9 +88,9 @@ def fetch_dust_all() -> dict:
     return {"stations": by_station, "avg": avg}
 
 
-def dust_for(region: str, dust: dict) -> tuple[dict, bool]:
-    """해당 구 측정소 값, 없으면 서울 평균 (값, 평균여부)"""
-    st = dust["stations"].get(region)
+def dust_for(sigungu: str, dust: dict) -> tuple:
+    """시군구명과 일치하는 측정소 값, 없으면 시/도 평균 (값, 평균여부)"""
+    st = dust["stations"].get(sigungu)
     if st and ("pm10" in st or "pm25" in st):
         return {"pm10": st.get("pm10"), "pm25": st.get("pm25")}, False
     return dust["avg"], True
@@ -132,9 +132,9 @@ def summarize_rain(rain_hours: list, pop_max: int) -> str:
     return f"☔ 오늘 {kind} 소식 있어요! ({span}, 강수확률 최대 {pop_max}%) 우산 꼭 챙기세요!"
 
 
-def build_message(now: datetime, region: str, w: dict | None,
-                  d: dict | None, is_avg: bool) -> str:
-    lines = [f"🌅 <b>{now.strftime('%-m월 %-d일')} {region} 아침 브리핑</b>", ""]
+def build_message(now: datetime, sido: str, sigungu: str, w: dict,
+                  d: dict, is_avg: bool) -> str:
+    lines = [f"🌅 <b>{now.strftime('%-m월 %-d일')} {sigungu} 아침 브리핑</b>", ""]
 
     if w:
         lines.append(summarize_rain(w["rain_hours"], w["pop_max"]))
@@ -152,7 +152,7 @@ def build_message(now: datetime, region: str, w: dict | None,
 
     lines.append("")
     if d and (d.get("pm10") is not None or d.get("pm25") is not None):
-        suffix = " (서울 평균)" if is_avg else ""
+        suffix = f" ({sido} 평균)" if is_avg else ""
         if d.get("pm10") is not None:
             lines.append(f"미세먼지(PM10): {d['pm10']:.0f}㎍/㎥ · {grade_pm10(d['pm10'])}{suffix}")
         if d.get("pm25") is not None:
@@ -173,38 +173,41 @@ def main():
         print("등록된 유저가 없어요. 종료.")
         return
 
-    # 미세먼지는 서울 전체를 한 번만 호출
-    dust = None
-    try:
-        dust = fetch_dust_all()
-    except Exception as e:
-        print(f"[dust] 실패: {e}", file=sys.stderr)
-
-    # 같은 격자를 쓰는 구는 날씨 호출 1번으로 공유
-    weather_cache: dict[tuple, dict | None] = {}
+    weather_cache: dict = {}   # (nx, ny) -> weather
+    dust_cache: dict = {}      # airkorea sidoName -> dust
     sent = failed = 0
 
     for chat_id, info in users.items():
-        region = info.get("region")
-        if region not in REGIONS:
+        sido, sigungu = info.get("sido"), info.get("sigungu")
+        if sido not in REGIONS or sigungu not in REGIONS[sido]["sigungu"]:
             continue
-        grid = REGIONS[region]
+        g = REGIONS[sido]["sigungu"][sigungu]
+        grid = (g["nx"], g["ny"])
         if grid not in weather_cache:
             try:
                 weather_cache[grid] = fetch_weather(now, *grid)
             except Exception as e:
-                print(f"[weather {region}] 실패: {e}", file=sys.stderr)
+                print(f"[weather {sigungu}] 실패: {e}", file=sys.stderr)
                 weather_cache[grid] = None
 
-        d, is_avg = dust_for(region, dust) if dust else (None, False)
-        msg = build_message(now, region, weather_cache[grid], d, is_avg)
+        airkorea = REGIONS[sido]["airkorea"]
+        if airkorea not in dust_cache:
+            try:
+                dust_cache[airkorea] = fetch_dust(airkorea)
+            except Exception as e:
+                print(f"[dust {airkorea}] 실패: {e}", file=sys.stderr)
+                dust_cache[airkorea] = None
+        dust = dust_cache[airkorea]
+        d, is_avg = dust_for(sigungu, dust) if dust else (None, False)
+
+        msg = build_message(now, sido, sigungu, weather_cache[grid], d, is_avg)
         try:
             send_message(chat_id, msg)
             sent += 1
         except Exception as e:
             print(f"[send {chat_id}] 실패: {e}", file=sys.stderr)
             failed += 1
-        time.sleep(0.1)  # 텔레그램 rate limit 여유
+        time.sleep(0.1)
 
     print(f"전송 {sent}건 완료, 실패 {failed}건")
 
