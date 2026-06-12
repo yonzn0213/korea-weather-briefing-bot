@@ -3,7 +3,7 @@ main = "src/index.ts"
 compatibility_date = "2025-09-01"
 
 kv_namespaces = [
-  { binding = "USERS", id = "REPLACE_WITH_KV_ID" }
+  { binding = "USERS", id = "2987663ff047423aad70f3d909587f6a" }
 ]
 
 [triggers]
