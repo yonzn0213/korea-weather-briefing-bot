@@ -6,13 +6,13 @@
 - /stop : 알림 해지
 """
 
-from common import (REGIONS, load_state, save_state, send_message,
-                    region_keyboard, tg)
+from common import (load_state, save_state, send_message,
+                    sido_keyboard, sigungu_keyboard, resolve_region, tg)
 
 WELCOME = (
-    "👋 안녕하세요! <b>서울 아침 브리핑 봇</b>이에요.\n"
+    "👋 안녕하세요! <b>전국 아침 브리핑 봇</b>이에요.\n"
     "매일 아침 7시, 선택하신 지역의 비 소식과 미세먼지를 알려드립니다.\n\n"
-    "먼저 지역을 선택해주세요 👇"
+    "먼저 시/도를 선택해주세요 👇"
 )
 
 HELP = (
@@ -35,48 +35,74 @@ def handle_message(state: dict, msg: dict):
         return
 
     if text in ("/start", "/region") or chat_id not in users:
-        send_message(chat_id, WELCOME if chat_id not in users else "변경할 지역을 선택해주세요 👇",
-                     reply_markup=region_keyboard())
+        send_message(chat_id, WELCOME if chat_id not in users else "변경할 시/도를 선택해주세요 👇",
+                     reply_markup=sido_keyboard())
         return
 
-    # 등록된 유저의 일반 메시지
-    send_message(chat_id, HELP.format(region=users[chat_id]["region"]))
+    u = users[chat_id]
+    send_message(chat_id, HELP.format(region=f"{u['sido']} {u['sigungu']}"))
 
 
 def handle_callback(state: dict, cq: dict):
     data = cq.get("data", "")
     chat_id = str(cq["message"]["chat"]["id"])
+    message_id = cq["message"]["message_id"]
+    cq_id = cq["id"]
 
-    if not data.startswith("r:"):
-        tg("answerCallbackQuery", {"callback_query_id": cq["id"]})
+    # 뒤로: 시도 선택으로 복귀
+    if data == "s:back":
+        tg("answerCallbackQuery", {"callback_query_id": cq_id})
+        tg("editMessageText", {
+            "chat_id": chat_id, "message_id": message_id,
+            "text": "시/도를 선택해주세요 👇", "parse_mode": "HTML",
+            "reply_markup": sido_keyboard(),
+        })
         return
 
-    region = data[2:]
-    if region not in REGIONS:
-        tg("answerCallbackQuery", {"callback_query_id": cq["id"], "text": "알 수 없는 지역이에요."})
+    # 시도 선택 -> 시군구 키보드
+    if data.startswith("s:"):
+        try:
+            sido_idx = int(data[2:])
+            kb = sigungu_keyboard(sido_idx)
+        except (ValueError, IndexError):
+            tg("answerCallbackQuery", {"callback_query_id": cq_id, "text": "다시 시도해주세요."})
+            return
+        tg("answerCallbackQuery", {"callback_query_id": cq_id})
+        tg("editMessageText", {
+            "chat_id": chat_id, "message_id": message_id,
+            "text": "세부 지역(시/군/구)을 선택해주세요 👇", "parse_mode": "HTML",
+            "reply_markup": kb,
+        })
         return
 
-    is_new = chat_id not in state["users"]
-    state["users"][chat_id] = {
-        "region": region,
-        "name": cq["from"].get("first_name", ""),
-    }
-    tg("answerCallbackQuery", {"callback_query_id": cq["id"], "text": f"{region} 설정 완료!"})
+    # 시군구 선택 -> 저장
+    if data.startswith("r:"):
+        try:
+            _, si, gi = data.split(":")
+            sido, sigungu = resolve_region(int(si), int(gi))
+        except (ValueError, IndexError):
+            tg("answerCallbackQuery", {"callback_query_id": cq_id, "text": "알 수 없는 지역이에요."})
+            return
 
-    # 키보드 메시지를 확정 문구로 교체
-    tg("editMessageText", {
-        "chat_id": chat_id,
-        "message_id": cq["message"]["message_id"],
-        "text": f"📍 <b>{region}</b>로 설정했어요!",
-        "parse_mode": "HTML",
-    })
+        is_new = chat_id not in state["users"]
+        state["users"][chat_id] = {
+            "sido": sido, "sigungu": sigungu,
+            "name": cq["from"].get("first_name", ""),
+        }
+        tg("answerCallbackQuery", {"callback_query_id": cq_id, "text": f"{sigungu} 설정 완료!"})
+        tg("editMessageText", {
+            "chat_id": chat_id, "message_id": message_id,
+            "text": f"📍 <b>{sido} {sigungu}</b>로 설정했어요!", "parse_mode": "HTML",
+        })
+        if is_new:
+            send_message(chat_id,
+                         f"등록 완료! 내일 아침 7시부터 <b>{sigungu}</b> 브리핑을 보내드릴게요. 🌅\n"
+                         "지역 변경은 /region, 해지는 /stop")
+        else:
+            send_message(chat_id, f"이제부터 <b>{sigungu}</b> 기준으로 알려드릴게요!")
+        return
 
-    if is_new:
-        send_message(chat_id,
-                     f"등록 완료! 내일 아침 7시부터 <b>{region}</b> 브리핑을 보내드릴게요. 🌅\n"
-                     "지역 변경은 /region, 해지는 /stop")
-    else:
-        send_message(chat_id, f"이제부터 <b>{region}</b> 기준으로 알려드릴게요!")
+    tg("answerCallbackQuery", {"callback_query_id": cq_id})
 
 
 def main():
