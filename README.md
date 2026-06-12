@@ -1,7 +1,7 @@
 # 🌅 전국 아침 브리핑 봇
 
 매일 아침 7시, 내가 사는 **전국 시/군/구**의 ☔ 비 소식과 😷 미세먼지를 텔레그램으로 알려주는 봇입니다.
-서버·DB 없이 **GitHub Actions만으로** 무료 운영됩니다.
+**Cloudflare Workers**로 동작해 `/start` 등록에 **즉시 응답**하고, 서버·DB 없이 무료 운영됩니다.
 
 ```
 🌅 6월 12일 강남구 아침 브리핑
@@ -24,7 +24,7 @@
 
 1. 텔레그램에서 봇 검색: **[@korea_weather_briefing_bot](https://t.me/korea_weather_briefing_bot)**
 2. **/start** 전송
-3. 잠시 후(최대 10분) 도착하는 버튼에서 **시/도 선택 → 세부 시/군/구 선택** — 끝!
+3. 바로 도착하는 버튼에서 **시/도 선택 → 세부 시/군/구 선택** — 끝!
 4. 다음 날 아침 7시부터 매일 브리핑이 도착합니다.
 
 | 명령어 | 기능 |
@@ -33,14 +33,13 @@
 | `/region` | 지역 변경 (한 번 고르면 계속 유지) |
 | `/stop` | 알림 해지 |
 
-> ⏱ 봇이 서버 없이 동작해서 등록 응답이 **최대 10분** 걸릴 수 있어요. 등록은 한 번뿐이니 양해를!
-
 ---
 
 ## ✨ 특징
 
 - **전국 지원**: 17개 시/도 → 각 시/군/구(약 230곳) 2단계 선택
-- **서버리스**: 별도 서버·DB 없이 GitHub Actions 스케줄만으로 동작 (무료)
+- **즉시 응답**: Cloudflare Workers webhook으로 `/start`·지역 선택을 바로 처리
+- **서버리스**: 별도 서버·DB 없이 Workers(webhook) + KV + Cron Trigger로 무료 운영
 - **날씨**: 기상청 단기예보 API — 시군구별 격자좌표, 새벽 5시 발표분 사용
 - **미세먼지**: 에어코리아 API — 시군구 측정소 실측값, 측정소가 없으면 해당 시/도 평균으로 자동 대체
 
@@ -76,26 +75,40 @@
    stop - 알림 해지
    ```
 
-### 3단계. GitHub 저장소 만들기
+### 3단계. Cloudflare Workers 배포
 
-1. 이 저장소 우측 상단 **Fork** (또는 새 public 저장소에 push)
-2. 내 저장소 → **Settings → Secrets and variables → Actions → New repository secret** 으로 2개 등록:
+필요한 것: Cloudflare 무료 계정, Node.js(설치돼 있으면 OK)
 
-   | Name | Value |
-   |------|-------|
-   | `DATA_GO_KR_KEY` | 1단계의 공공데이터포털 **Decoding** 인증키 |
-   | `TELEGRAM_BOT_TOKEN` | 2단계의 봇 토큰 |
+```bash
+npm i -g wrangler
+wrangler login                       # 브라우저 인증
 
-3. **Settings → Actions → General → Workflow permissions** 에서 **Read and write permissions** 선택 후 Save (유저 목록 자동 커밋에 필요)
-4. **Actions 탭** → 배너가 뜨면 워크플로 활성화 (Fork한 경우 스케줄이 기본 비활성화됨)
+cd worker
+npm install
 
-### 4단계. 동작 테스트
+# KV 네임스페이스 생성 → 출력된 id를 worker/wrangler.toml의 REPLACE_WITH_KV_ID에 기입
+wrangler kv namespace create USERS
 
-1. 내 봇에게 **/start** 전송
-2. **Actions 탭 → 「유저 등록 처리」 → Run workflow** (기다리기 싫을 때 수동 실행)
-3. 시/도 → 시군구 선택
-4. **Actions 탭 → 「전국 아침 브리핑」 → Run workflow** → 브리핑 도착하면 성공! 🎉
-5. README 상단의 봇 링크를 본인 봇으로 수정해서 공유하세요.
+# 시크릿 3개 등록
+wrangler secret put TELEGRAM_BOT_TOKEN   # 2단계의 봇 토큰
+wrangler secret put DATA_GO_KR_KEY       # 1단계의 Decoding 인증키
+wrangler secret put WEBHOOK_SECRET       # 임의 난수 (예: openssl rand -hex 16)
+
+wrangler deploy                          # 출력된 https://....workers.dev URL 확보
+```
+
+### 4단계. webhook 등록 + 테스트
+
+```bash
+# <토큰>=봇 토큰, <WorkerURL>=배포 URL, <시크릿>=위 WEBHOOK_SECRET와 동일
+curl "https://api.telegram.org/bot<토큰>/setWebhook" \
+  -d "url=<WorkerURL>" -d "secret_token=<시크릿>"
+```
+
+1. 텔레그램에서 내 봇에 **/start** → **즉시** 시/도 키보드 도착 → 시군구 선택 → 즉시 확정
+2. 일일 브리핑은 매일 **22:00 UTC(KST 07:00)** Cron Trigger로 자동 발송
+3. 로그 확인: `wrangler tail`
+4. README 상단의 봇 링크를 본인 봇으로 수정해서 공유하세요.
 
 </details>
 
@@ -105,25 +118,26 @@
 
 | 파일 | 역할 |
 |------|------|
-| `register.py` | 10분마다 새 메시지 폴링 → 시도/시군구 2단계 등록·변경·해지 처리 |
-| `briefing.py` | 매일 아침 유저별 지역 브리핑 전송 (시/도별 미세먼지 캐싱) |
-| `common.py` | `regions.json` 로드, 시도/시군구 키보드, 텔레그램 헬퍼, 상태 저장 |
-| `regions.json` | 전국 17개 시/도 → 시군구 격자좌표(nx, ny) + 에어코리아 sidoName |
-| `tools/build_regions.py` | `regions.json` 생성·검증 (시군구 중심 위경도 → 기상청 격자 변환) |
-| `state.json` | 유저 목록 (Actions가 자동 커밋 — DB 불필요) |
-| `.github/workflows/` | 등록 폴링(10분) + 일일 브리핑(KST 07:00) 스케줄 |
+| `worker/src/index.ts` | 진입점 — webhook(즉시 등록) + Cron Trigger(일일 브리핑) |
+| `worker/src/register.ts` | 시도/시군구 2단계 등록·변경·해지 처리 |
+| `worker/src/briefing.ts` | 유저별 날씨/미세먼지 브리핑 (subrequest 예산 가드) |
+| `worker/src/regions.ts` | `regions.json` 로드 + 시도/시군구 키보드 |
+| `worker/src/store.ts` | Cloudflare KV 유저 저장소 (유저당 키 1개) |
+| `worker/src/telegram.ts` | 텔레그램 API 헬퍼 |
+| `worker/wrangler.toml` | Worker 설정 (KV 바인딩, cron) |
+| `regions.json` / `tools/build_regions.py` | 전국 시군구 격자좌표 + 생성·검증 도구 |
+
+테스트: `cd worker && npm test` (vitest)
 
 ## 📝 운영 참고사항 (자체 호스팅 시)
 
-- **공개 정보**: public 저장소라 `state.json`의 유저 chat_id 목록이 공개됩니다.
-  chat_id만으로는 메시지를 보낼 수 없고(봇 토큰 필요) 토큰은 Secrets에 안전하게 보관되지만,
-  부담되면 private 저장소로 바꾸고 `register.yml` cron을 `*/30 * * * *`로 조정하세요 (무료 한도 월 2,000분).
-- **발송 시간 변경**: `daily-briefing.yml`의 cron은 **UTC** 기준 (KST−9시간). KST 6:30 → `30 21 * * *`
-- **cron 지연**: GitHub 무료 러너 특성상 수~수십 분 지연될 수 있습니다. 중요하면 앞당겨 설정하세요.
-- **60일 규칙**: 저장소에 60일간 커밋이 없으면 GitHub이 스케줄을 자동 정지합니다.
-  유저 활동이 있으면 state.json 커밋이 생겨 보통 문제없고, 정지 알림 메일이 오면 Actions 탭에서 재활성화하면 됩니다.
+- **즉시성**: 텔레그램 webhook이라 `/start`·지역 선택이 바로 처리됩니다. (폴링 지연 없음)
+- **개인정보**: 유저 목록은 Cloudflare KV에 비공개 저장됩니다 (저장소에 노출 안 됨).
+- **무료 한도**: Workers 무료 플랜은 요청당 subrequest 50개라, 일일 브리핑은 캐싱 후 약 **40~45명**까지 안전합니다.
+  초과 시 남은 유저는 그 회차에 건너뛰고 로그(`wrangler tail`)로 표시됩니다. 더 필요하면 유료($5/월) 또는 Cloudflare Queues로 확장.
+- **발송 시간 변경**: `worker/wrangler.toml`의 `crons`는 **UTC** 기준 (KST−9시간). KST 6:30 → `30 21 * * *`
 - **API 한도**: 공공데이터포털 개발계정은 일 1,000건 안팎(API별 상이) — 이 봇 사용량으론 충분합니다.
-- **지역 데이터 갱신**: 시군구 좌표는 `python tools/build_regions.py`로 `regions.json`을 재생성합니다.
+- **지역 데이터 갱신**: 시군구 좌표는 `python tools/build_regions.py`로 `regions.json` 재생성 후 `worker/regions.json`에 복사합니다.
   미세먼지 측정소 매칭은 시군구명과 일치하는 측정소가 있을 때만 적용되고, 없으면 해당 시/도 평균을 씁니다.
 
 ## License
