@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 .env
 .claude/
+node_modules/
+worker/node_modules/
+worker/.wrangler/
+worker/.dev.vars
