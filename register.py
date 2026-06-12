@@ -34,12 +34,14 @@ def handle_message(state: dict, msg: dict):
             send_message(chat_id, "등록된 알림이 없어요. /start 로 시작할 수 있어요.")
         return
 
-    if text in ("/start", "/region") or chat_id not in users:
-        send_message(chat_id, WELCOME if chat_id not in users else "변경할 시/도를 선택해주세요 👇",
+    # 미등록이거나, 옛 스키마(sido 없음)로 남은 유저는 시/도 재선택으로 안내
+    u = users.get(chat_id)
+    needs_region = u is None or "sido" not in u
+    if text in ("/start", "/region") or needs_region:
+        send_message(chat_id, WELCOME if needs_region else "변경할 시/도를 선택해주세요 👇",
                      reply_markup=sido_keyboard())
         return
 
-    u = users[chat_id]
     send_message(chat_id, HELP.format(region=f"{u['sido']} {u['sigungu']}"))
 
 
