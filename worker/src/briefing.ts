@@ -16,6 +16,7 @@ export interface Weather {
   tmn: number | null;
   tmx: number | null;
   sky: string | null;
+  hourly: Record<string, number>;
 }
 export interface DustVal { pm10: number | null; pm25: number | null; }
 export interface Dust { stations: Record<string, DustVal>; avg: DustVal; }
@@ -39,6 +40,21 @@ function baseDateTime(kst: Date): [string, string] {
   return [ymd(prev), "2300"];
 }
 
+export function parseWeatherItems(items: any[], today: string): Weather {
+  const data: Weather = { popMax: 0, rainHours: [], tmn: null, tmx: null, sky: null, hourly: {} };
+  for (const it of items) {
+    if (it.fcstDate !== today) continue;
+    const { category: cat, fcstValue: val, fcstTime: t } = it;
+    if (cat === "POP") data.popMax = Math.max(data.popMax, parseInt(val, 10));
+    else if (cat === "PTY" && val !== "0") data.rainHours.push([t, PTY_LABEL[val] || "강수"]);
+    else if (cat === "TMN") data.tmn = parseFloat(val);
+    else if (cat === "TMX") data.tmx = parseFloat(val);
+    else if (cat === "TMP") data.hourly[t] = parseFloat(val);
+    else if (cat === "SKY" && t === "1200") data.sky = SKY_LABEL[val] || "";
+  }
+  return data;
+}
+
 export async function fetchWeather(key: string, nx: number, ny: number, now: Date): Promise<Weather> {
   const kst = toKst(now);
   const [baseDate, baseTime] = baseDateTime(kst);
@@ -50,18 +66,8 @@ export async function fetchWeather(key: string, nx: number, ny: number, now: Dat
   }).toString();
   const r = await fetch(url.toString());
   const j = (await r.json()) as any;
-  const items = j.response.body.items.item as any[];
-  const data: Weather = { popMax: 0, rainHours: [], tmn: null, tmx: null, sky: null };
-  for (const it of items) {
-    if (it.fcstDate !== today) continue;
-    const { category: cat, fcstValue: val, fcstTime: t } = it;
-    if (cat === "POP") data.popMax = Math.max(data.popMax, parseInt(val, 10));
-    else if (cat === "PTY" && val !== "0") data.rainHours.push([t, PTY_LABEL[val] || "강수"]);
-    else if (cat === "TMN") data.tmn = parseFloat(val);
-    else if (cat === "TMX") data.tmx = parseFloat(val);
-    else if (cat === "SKY" && t === "1200") data.sky = SKY_LABEL[val] || "";
-  }
-  return data;
+  const items = (j.response.body.items.item as any[]) ?? [];
+  return parseWeatherItems(items, today);
 }
 
 export async function fetchDust(key: string, sidoName: string): Promise<Dust> {

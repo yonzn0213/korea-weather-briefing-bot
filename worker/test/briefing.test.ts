@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { dustFor, buildMessage, gradePm10, rotateByDate } from "../src/briefing";
+import { dustFor, buildMessage, gradePm10, rotateByDate, parseWeatherItems } from "../src/briefing";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -61,5 +61,26 @@ describe("buildMessage", () => {
     const msg = buildMessage(now, "경기도", "수원시", null, null, false);
     expect(msg).toContain("날씨 정보를 불러오지 못했어요");
     expect(msg).toContain("미세먼지 정보를 불러오지 못했어요");
+  });
+});
+
+describe("parseWeatherItems", () => {
+  const today = "20260615";
+  const items = [
+    { fcstDate: today, fcstTime: "0600", category: "TMP", fcstValue: "19" },
+    { fcstDate: today, fcstTime: "0900", category: "TMP", fcstValue: "23" },
+    { fcstDate: today, fcstTime: "1500", category: "TMP", fcstValue: "32" },
+    { fcstDate: today, fcstTime: "1200", category: "POP", fcstValue: "80" },
+    { fcstDate: today, fcstTime: "1200", category: "SKY", fcstValue: "4" },
+    { fcstDate: "20260616", fcstTime: "0600", category: "TMP", fcstValue: "5" }, // 내일치는 무시
+  ];
+  it("오늘 TMP만 시간→기온 맵으로 수집", () => {
+    const w = parseWeatherItems(items, today);
+    expect(w.hourly).toEqual({ "0600": 19, "0900": 23, "1500": 32 });
+  });
+  it("POP/SKY 등 기존 파싱 유지", () => {
+    const w = parseWeatherItems(items, today);
+    expect(w.popMax).toBe(80);
+    expect(w.sky).toContain("흐림");
   });
 });
