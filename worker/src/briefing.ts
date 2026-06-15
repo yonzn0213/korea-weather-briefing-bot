@@ -129,6 +129,26 @@ export function formatHourly(hourly: Record<string, number>): string {
   return parts.length ? "⏰ " + parts.join(" · ") : "";
 }
 
+// 표준 기온별 옷차림 표 (낮은 기온일수록 두꺼운 옷)
+export function clothingFor(t: number): string {
+  if (t >= 28) return "민소매·반팔·반바지";
+  if (t >= 23) return "반팔·얇은 셔츠·면바지";
+  if (t >= 20) return "긴팔·얇은 가디건·면바지";
+  if (t >= 17) return "맨투맨·얇은 니트·가디건";
+  if (t >= 12) return "자켓·가디건·야상·청바지";
+  if (t >= 9) return "트렌치코트·점퍼·니트";
+  if (t >= 5) return "코트·히트텍·가죽자켓";
+  return "패딩·두꺼운 코트·목도리";
+}
+
+// 최저기온 옷차림 ~ 최고기온 옷차림 (두꺼운 쪽 ~ 얇은 쪽)
+export function clothingRange(low: number | null, high: number | null): string {
+  if (low === null && high === null) return "";
+  const warm = clothingFor(Math.round(low ?? (high as number)));
+  const light = clothingFor(Math.round(high ?? (low as number)));
+  return warm === light ? warm : `${warm} ~ ${light}`;
+}
+
 function summarizeRain(rainHours: [string, string][], popMax: number): string {
   if (rainHours.length === 0) {
     if (popMax >= 60) return `☔ 비 예보는 없지만 강수확률이 최대 ${popMax}%예요. 우산 챙기는 게 안전!`;

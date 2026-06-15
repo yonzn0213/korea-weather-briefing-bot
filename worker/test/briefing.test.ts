@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { dustFor, buildMessage, gradePm10, rotateByDate, parseWeatherItems, resolveLowHigh, formatHourly } from "../src/briefing";
+import { dustFor, buildMessage, gradePm10, rotateByDate, parseWeatherItems, resolveLowHigh, formatHourly, clothingFor, clothingRange } from "../src/briefing";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -119,5 +119,33 @@ describe("formatHourly", () => {
   });
   it("해당 시간 없으면 빈 문자열", () => {
     expect(formatHourly({ "0700": 19 })).toBe("");
+  });
+});
+
+describe("clothingFor", () => {
+  it("구간 경계", () => {
+    expect(clothingFor(30)).toBe("민소매·반팔·반바지");
+    expect(clothingFor(27)).toBe("반팔·얇은 셔츠·면바지");
+    expect(clothingFor(22)).toBe("긴팔·얇은 가디건·면바지");
+    expect(clothingFor(18)).toBe("맨투맨·얇은 니트·가디건");
+    expect(clothingFor(15)).toBe("자켓·가디건·야상·청바지");
+    expect(clothingFor(10)).toBe("트렌치코트·점퍼·니트");
+    expect(clothingFor(6)).toBe("코트·히트텍·가죽자켓");
+    expect(clothingFor(-2)).toBe("패딩·두꺼운 코트·목도리");
+  });
+});
+
+describe("clothingRange", () => {
+  it("최저·최고가 다른 구간이면 범위", () => {
+    expect(clothingRange(19, 32)).toBe("맨투맨·얇은 니트·가디건 ~ 민소매·반팔·반바지");
+  });
+  it("같은 구간이면 하나만", () => {
+    expect(clothingRange(23, 27)).toBe("반팔·얇은 셔츠·면바지");
+  });
+  it("한쪽만 있으면 그 값 기준", () => {
+    expect(clothingRange(null, 27)).toBe("반팔·얇은 셔츠·면바지");
+  });
+  it("둘 다 없으면 빈 문자열", () => {
+    expect(clothingRange(null, null)).toBe("");
   });
 });
