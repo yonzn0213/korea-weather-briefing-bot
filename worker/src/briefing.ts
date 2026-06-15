@@ -211,8 +211,10 @@ export function buildMessage(
     lines.push("⚠️ 미세먼지 정보를 불러오지 못했어요.");
   }
 
-  lines.push(`\n🎨 오늘의 행운 색: ${pickLuckyColor(rand)}`);
-  lines.push("\n좋은 하루 보내세요! 💪");
+  lines.push("");
+  lines.push(`🎨 오늘의 행운 색: ${pickLuckyColor(rand)}`);
+  lines.push("");
+  lines.push("좋은 하루 보내세요! 💪");
   return lines.join("\n");
 }
 
