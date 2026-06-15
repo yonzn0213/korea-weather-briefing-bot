@@ -9,6 +9,7 @@ const PTY_LABEL: Record<string, string> = {
 const SKY_LABEL: Record<string, string> = { "1": "맑음 ☀️", "3": "구름많음 ⛅", "4": "흐림 ☁️" };
 
 const MAX_SUBREQUESTS = 45; // 무료 50 한도 안전 마진
+const HOURLY_SLOTS = ["0600", "0900", "1200", "1500", "1800", "2100"];
 
 export interface Weather {
   popMax: number;
@@ -119,6 +120,13 @@ export function resolveLowHigh(w: Weather): [number | null, number | null] {
   const low = w.tmn ?? (temps.length ? Math.min(...temps) : null);
   const high = w.tmx ?? (temps.length ? Math.max(...temps) : null);
   return [low, high];
+}
+
+export function formatHourly(hourly: Record<string, number>): string {
+  const parts = HOURLY_SLOTS
+    .filter((t) => hourly[t] !== undefined)
+    .map((t) => `${parseInt(t.slice(0, 2), 10)}시 ${Math.round(hourly[t])}°`);
+  return parts.length ? "⏰ " + parts.join(" · ") : "";
 }
 
 function summarizeRain(rainHours: [string, string][], popMax: number): string {

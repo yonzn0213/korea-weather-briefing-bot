@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { dustFor, buildMessage, gradePm10, rotateByDate, parseWeatherItems, resolveLowHigh } from "../src/briefing";
+import { dustFor, buildMessage, gradePm10, rotateByDate, parseWeatherItems, resolveLowHigh, formatHourly } from "../src/briefing";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -102,5 +102,18 @@ describe("parseWeatherItems", () => {
     const w = parseWeatherItems(items, today);
     expect(w.popMax).toBe(80);
     expect(w.sky).toContain("흐림");
+  });
+});
+
+describe("formatHourly", () => {
+  it("6·9·12·15·18·21시만, 소수 반올림", () => {
+    const s = formatHourly({ "0600": 18.4, "0900": 21, "1200": 25, "1500": 26, "1800": 23, "2100": 20, "0700": 19 });
+    expect(s).toBe("⏰ 6시 18° · 9시 21° · 12시 25° · 15시 26° · 18시 23° · 21시 20°");
+  });
+  it("일부 시간만 있으면 있는 것만", () => {
+    expect(formatHourly({ "0900": 21, "1500": 26 })).toBe("⏰ 9시 21° · 15시 26°");
+  });
+  it("해당 시간 없으면 빈 문자열", () => {
+    expect(formatHourly({ "0700": 19 })).toBe("");
   });
 });
