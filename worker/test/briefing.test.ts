@@ -42,7 +42,7 @@ describe("gradePm10", () => {
 
 describe("buildMessage", () => {
   const now = new Date("2026-06-12T22:00:00Z"); // KST 06-13 07:00
-  const W = { popMax: 80, rainHours: [["1400", "비"], ["1500", "비"]] as [string, string][], tmn: 19, tmx: 26, sky: "흐림 ☁️" };
+  const W = { popMax: 80, rainHours: [["1400", "비"], ["1500", "비"]] as [string, string][], tmn: 19, tmx: 26, sky: "흐림 ☁️", hourly: {} };
 
   it("제목은 시군구, 비/온도/하늘 포함", () => {
     const msg = buildMessage(now, "경기도", "수원시", W, { pm10: 45, pm25: 22 }, false);
