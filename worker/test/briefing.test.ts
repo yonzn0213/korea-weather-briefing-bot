@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { dustFor, buildMessage, gradePm10, rotateByDate, parseWeatherItems } from "../src/briefing";
+import { dustFor, buildMessage, gradePm10, rotateByDate, parseWeatherItems, resolveLowHigh } from "../src/briefing";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -61,6 +61,22 @@ describe("buildMessage", () => {
     const msg = buildMessage(now, "경기도", "수원시", null, null, false);
     expect(msg).toContain("날씨 정보를 불러오지 못했어요");
     expect(msg).toContain("미세먼지 정보를 불러오지 못했어요");
+  });
+});
+
+describe("resolveLowHigh", () => {
+  const base = { popMax: 0, rainHours: [] as [string, string][], sky: null };
+  it("TMN/TMX 있으면 그대로", () => {
+    const w = { ...base, tmn: 18, tmx: 27, hourly: { "0600": 20, "1500": 25 } };
+    expect(resolveLowHigh(w as any)).toEqual([18, 27]);
+  });
+  it("TMN/TMX 없으면 hourly min/max로 fallback", () => {
+    const w = { ...base, tmn: null, tmx: null, hourly: { "0600": 19, "0900": 23, "1500": 32 } };
+    expect(resolveLowHigh(w as any)).toEqual([19, 32]);
+  });
+  it("TMN/TMX 없고 hourly도 비면 null", () => {
+    const w = { ...base, tmn: null, tmx: null, hourly: {} };
+    expect(resolveLowHigh(w as any)).toEqual([null, null]);
   });
 });
 

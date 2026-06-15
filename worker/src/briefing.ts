@@ -113,6 +113,14 @@ export function gradePm25(v: number): string {
   return "매우나쁨 🔴";
 }
 
+// 0500 발표분엔 TMN/TMX가 없으므로, 없을 때 시간별 기온(TMP) min/max로 대체
+export function resolveLowHigh(w: Weather): [number | null, number | null] {
+  const temps = Object.values(w.hourly);
+  const low = w.tmn ?? (temps.length ? Math.min(...temps) : null);
+  const high = w.tmx ?? (temps.length ? Math.max(...temps) : null);
+  return [low, high];
+}
+
 function summarizeRain(rainHours: [string, string][], popMax: number): string {
   if (rainHours.length === 0) {
     if (popMax >= 60) return `☔ 비 예보는 없지만 강수확률이 최대 ${popMax}%예요. 우산 챙기는 게 안전!`;
