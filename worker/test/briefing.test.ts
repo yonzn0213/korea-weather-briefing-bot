@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { dustFor, buildMessage, gradePm10, rotateByDate, parseWeatherItems, resolveLowHigh, formatHourly, clothingFor, clothingRange } from "../src/briefing";
+import { dustFor, buildMessage, gradePm10, rotateByDate, parseWeatherItems, resolveLowHigh, formatHourly, clothingFor, clothingRange, pickLuckyColor, LUCKY_COLORS } from "../src/briefing";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -158,5 +158,19 @@ describe("clothingRange", () => {
   });
   it("둘 다 없으면 빈 문자열", () => {
     expect(clothingRange(null, null)).toBe("");
+  });
+});
+
+describe("pickLuckyColor", () => {
+  it("rand=0이면 첫 색", () => {
+    expect(pickLuckyColor(() => 0)).toBe(LUCKY_COLORS[0]);
+  });
+  it("rand≈1이면 마지막 색", () => {
+    expect(pickLuckyColor(() => 0.999)).toBe(LUCKY_COLORS[LUCKY_COLORS.length - 1]);
+  });
+  it("항상 목록 안의 값", () => {
+    for (const r of [0.1, 0.37, 0.5, 0.83]) {
+      expect(LUCKY_COLORS).toContain(pickLuckyColor(() => r));
+    }
   });
 });
