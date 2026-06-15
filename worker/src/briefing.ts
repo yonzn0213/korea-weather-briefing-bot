@@ -50,7 +50,7 @@ export function parseWeatherItems(items: any[], today: string): Weather {
     else if (cat === "PTY" && val !== "0") data.rainHours.push([t, PTY_LABEL[val] || "강수"]);
     else if (cat === "TMN") data.tmn = parseFloat(val);
     else if (cat === "TMX") data.tmx = parseFloat(val);
-    else if (cat === "TMP") data.hourly[t] = parseFloat(val);
+    else if (cat === "TMP") { const v = parseFloat(val); if (!Number.isNaN(v)) data.hourly[t] = v; }
     else if (cat === "SKY" && t === "1200") data.sky = SKY_LABEL[val] || "";
   }
   return data;

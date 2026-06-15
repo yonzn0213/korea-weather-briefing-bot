@@ -103,6 +103,10 @@ describe("parseWeatherItems", () => {
     expect(w.popMax).toBe(80);
     expect(w.sky).toContain("흐림");
   });
+  it("TMP가 숫자가 아니면 hourly에 넣지 않음", () => {
+    const bad = [{ fcstDate: today, fcstTime: "0900", category: "TMP", fcstValue: "" }];
+    expect(parseWeatherItems(bad, today).hourly).toEqual({});
+  });
 });
 
 describe("formatHourly", () => {
