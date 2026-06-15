@@ -171,6 +171,9 @@ describe("clothingRange", () => {
   it("둘 다 없으면 빈 문자열", () => {
     expect(clothingRange(null, null)).toBe("");
   });
+  it("인자 순서가 뒤바뀌어도 두꺼운 쪽 ~ 얇은 쪽", () => {
+    expect(clothingRange(32, 19)).toBe("맨투맨·얇은 니트·가디건 ~ 민소매·반팔·반바지");
+  });
 });
 
 describe("pickLuckyColor", () => {

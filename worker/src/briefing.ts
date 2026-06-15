@@ -148,8 +148,11 @@ export function clothingFor(t: number): string {
 // 최저기온 옷차림 ~ 최고기온 옷차림 (두꺼운 쪽 ~ 얇은 쪽)
 export function clothingRange(low: number | null, high: number | null): string {
   if (low === null && high === null) return "";
-  const thick = clothingFor(Math.round(low ?? (high as number)));  // 최저기온 쪽(더 두껍게)
-  const thin = clothingFor(Math.round(high ?? (low as number)));   // 최고기온 쪽(더 얇게)
+  let lo = low ?? (high as number);
+  let hi = high ?? (low as number);
+  if (lo > hi) [lo, hi] = [hi, lo];          // 인자 순서가 뒤바뀌어도 두꺼운 쪽 ~ 얇은 쪽 유지
+  const thick = clothingFor(Math.round(lo));  // 최저기온 쪽(더 두껍게)
+  const thin = clothingFor(Math.round(hi));   // 최고기온 쪽(더 얇게)
   return thick === thin ? thick : `${thick} ~ ${thin}`;
 }
 
