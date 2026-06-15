@@ -78,6 +78,10 @@ describe("resolveLowHigh", () => {
     const w = { ...base, tmn: null, tmx: null, hourly: {} };
     expect(resolveLowHigh(w as any)).toEqual([null, null]);
   });
+  it("TMN=0(0°C)이면 hourly로 fallback하지 않음", () => {
+    const w = { ...base, tmn: 0, tmx: 5, hourly: { "0600": 3, "1500": 8 } };
+    expect(resolveLowHigh(w as any)).toEqual([0, 5]);
+  });
 });
 
 describe("parseWeatherItems", () => {
