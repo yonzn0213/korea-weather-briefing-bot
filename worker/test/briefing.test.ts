@@ -42,7 +42,7 @@ describe("gradePm10", () => {
 
 describe("buildMessage", () => {
   const now = new Date("2026-06-12T22:00:00Z"); // KST 06-13 07:00
-  const W = { popMax: 80, rainHours: [["1400", "비"], ["1500", "비"]] as [string, string][], tmn: 19, tmx: 26, sky: "흐림 ☁️", hourly: {} };
+  const W = { popMax: 80, rainHours: [["1400", "비"], ["1500", "비"]] as [string, string][], tmn: 19, tmx: 26, sky: "흐림 ☁️", hourly: { "0600": 19, "0900": 22, "1200": 25, "1500": 26, "1800": 24, "2100": 21 } };
 
   it("제목은 시군구, 비/온도/하늘 포함", () => {
     const msg = buildMessage(now, "경기도", "수원시", W, { pm10: 45, pm25: 22 }, false);
@@ -61,6 +61,18 @@ describe("buildMessage", () => {
     const msg = buildMessage(now, "경기도", "수원시", null, null, false);
     expect(msg).toContain("날씨 정보를 불러오지 못했어요");
     expect(msg).toContain("미세먼지 정보를 불러오지 못했어요");
+  });
+  it("시간대별·옷차림·행운색 줄 포함", () => {
+    const msg = buildMessage(now, "경기도", "수원시", W, { pm10: 45, pm25: 22 }, false, () => 0);
+    expect(msg).toContain("⏰ 6시 19°");
+    expect(msg).toContain("👕 옷차림:");
+    expect(msg).toContain("🎨 오늘의 행운 색: " + LUCKY_COLORS[0]);
+  });
+  it("TMN/TMX 없으면 hourly로 최저/최고 fallback", () => {
+    const wf = { popMax: 0, rainHours: [] as [string, string][], tmn: null, tmx: null, sky: null, hourly: { "0600": 19, "1500": 32 } };
+    const msg = buildMessage(now, "경기도", "수원시", wf, { pm10: 45, pm25: 22 }, false, () => 0);
+    expect(msg).toContain("최저 19°C");
+    expect(msg).toContain("최고 32°C");
   });
 });
 

@@ -177,16 +177,25 @@ function summarizeRain(rainHours: [string, string][], popMax: number): string {
   return `☔ 오늘 ${kind} 소식 있어요! (${span}, 강수확률 최대 ${popMax}%) 우산 꼭 챙기세요!`;
 }
 
-export function buildMessage(now: Date, sido: string, sigungu: string, w: Weather | null, d: DustVal | null, isAvg: boolean): string {
+export function buildMessage(
+  now: Date, sido: string, sigungu: string,
+  w: Weather | null, d: DustVal | null, isAvg: boolean,
+  rand: () => number = Math.random,
+): string {
   const kst = toKst(now);
   const lines: string[] = [`🌅 <b>${kst.getUTCMonth() + 1}월 ${kst.getUTCDate()}일 ${sigungu} 아침 브리핑</b>`, ""];
 
   if (w) {
     lines.push(summarizeRain(w.rainHours, w.popMax));
+    const [low, high] = resolveLowHigh(w);
     const temp: string[] = [];
-    if (w.tmn !== null) temp.push(`최저 ${Math.round(w.tmn)}°C`);
-    if (w.tmx !== null) temp.push(`최고 ${Math.round(w.tmx)}°C`);
+    if (low !== null) temp.push(`최저 ${Math.round(low)}°C`);
+    if (high !== null) temp.push(`최고 ${Math.round(high)}°C`);
     if (temp.length) lines.push("🌡 " + temp.join(" / "));
+    const hourly = formatHourly(w.hourly);
+    if (hourly) lines.push(hourly);
+    const clothing = clothingRange(low, high);
+    if (clothing) lines.push("👕 옷차림: " + clothing);
     if (w.sky) lines.push(`하늘: ${w.sky}`);
   } else {
     lines.push("⚠️ 날씨 정보를 불러오지 못했어요.");
@@ -202,6 +211,7 @@ export function buildMessage(now: Date, sido: string, sigungu: string, w: Weathe
     lines.push("⚠️ 미세먼지 정보를 불러오지 못했어요.");
   }
 
+  lines.push(`\n🎨 오늘의 행운 색: ${pickLuckyColor(rand)}`);
   lines.push("\n좋은 하루 보내세요! 💪");
   return lines.join("\n");
 }
