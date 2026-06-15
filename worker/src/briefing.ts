@@ -144,9 +144,9 @@ export function clothingFor(t: number): string {
 // 최저기온 옷차림 ~ 최고기온 옷차림 (두꺼운 쪽 ~ 얇은 쪽)
 export function clothingRange(low: number | null, high: number | null): string {
   if (low === null && high === null) return "";
-  const warm = clothingFor(Math.round(low ?? (high as number)));
-  const light = clothingFor(Math.round(high ?? (low as number)));
-  return warm === light ? warm : `${warm} ~ ${light}`;
+  const thick = clothingFor(Math.round(low ?? (high as number)));  // 최저기온 쪽(더 두껍게)
+  const thin = clothingFor(Math.round(high ?? (low as number)));   // 최고기온 쪽(더 얇게)
+  return thick === thin ? thick : `${thick} ~ ${thin}`;
 }
 
 function summarizeRain(rainHours: [string, string][], popMax: number): string {

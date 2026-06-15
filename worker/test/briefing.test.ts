@@ -123,7 +123,7 @@ describe("formatHourly", () => {
 });
 
 describe("clothingFor", () => {
-  it("구간 경계", () => {
+  it("구간 중간값", () => {
     expect(clothingFor(30)).toBe("민소매·반팔·반바지");
     expect(clothingFor(27)).toBe("반팔·얇은 셔츠·면바지");
     expect(clothingFor(22)).toBe("긴팔·얇은 가디건·면바지");
@@ -132,6 +132,16 @@ describe("clothingFor", () => {
     expect(clothingFor(10)).toBe("트렌치코트·점퍼·니트");
     expect(clothingFor(6)).toBe("코트·히트텍·가죽자켓");
     expect(clothingFor(-2)).toBe("패딩·두꺼운 코트·목도리");
+  });
+  it("구간 하한 경계(inclusive)", () => {
+    expect(clothingFor(28)).toBe("민소매·반팔·반바지");
+    expect(clothingFor(23)).toBe("반팔·얇은 셔츠·면바지");
+    expect(clothingFor(20)).toBe("긴팔·얇은 가디건·면바지");
+    expect(clothingFor(17)).toBe("맨투맨·얇은 니트·가디건");
+    expect(clothingFor(12)).toBe("자켓·가디건·야상·청바지");
+    expect(clothingFor(9)).toBe("트렌치코트·점퍼·니트");
+    expect(clothingFor(5)).toBe("코트·히트텍·가죽자켓");
+    expect(clothingFor(4)).toBe("패딩·두꺼운 코트·목도리");
   });
 });
 
@@ -144,6 +154,7 @@ describe("clothingRange", () => {
   });
   it("한쪽만 있으면 그 값 기준", () => {
     expect(clothingRange(null, 27)).toBe("반팔·얇은 셔츠·면바지");
+    expect(clothingRange(27, null)).toBe("반팔·얇은 셔츠·면바지");
   });
   it("둘 다 없으면 빈 문자열", () => {
     expect(clothingRange(null, null)).toBe("");
