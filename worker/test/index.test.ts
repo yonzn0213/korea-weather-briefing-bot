@@ -88,4 +88,34 @@ describe("scheduled cron 분기", () => {
     expect(calledWith(fn, "getUltraSrtFcst")).toBe(true);
     expect(calledWith(fn, "getVilageFcst")).toBe(false);
   });
+
+  it("발송 실패 시 ADMIN_CHAT_ID로 운영 경보(dead-man switch)", async () => {
+    const e: Env = { ...env(), ADMIN_CHAT_ID: "999" };
+    await e.USERS.put("1", JSON.stringify({ regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수" }));
+    // 텔레그램 발송이 실패(ok:false)하도록 → 브리핑 sent 0 / failed 발생
+    const fn = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes("getVilageFcst")) return new Response(JSON.stringify({ response: { body: { items: { item: [] } } } }));
+      if (u.includes("ArpltnInforInqireSvc")) return new Response(JSON.stringify({ response: { body: { items: [] } } }));
+      return new Response(JSON.stringify({ ok: false }));
+    });
+    vi.stubGlobal("fetch", fn);
+    await worker.scheduled({ cron: "0 22 * * *", scheduledTime: Date.parse("2026-06-12T22:00:00Z") } as any, e, ctx);
+    const adminCall = fn.mock.calls
+      .map((c: any[]) => { try { return JSON.parse(c[1].body); } catch { return {}; } })
+      .find((b: any) => b.chat_id === "999" && typeof b.text === "string" && b.text.includes("⚠️"));
+    expect(adminCall).toBeTruthy();
+  });
+
+  it("ADMIN_CHAT_ID 없으면 경보 안 보냄", async () => {
+    const e = env(); // ADMIN_CHAT_ID 미설정
+    await e.USERS.put("1", JSON.stringify({ regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수" }));
+    const fn = vi.fn(async () => new Response(JSON.stringify({ ok: false })));
+    vi.stubGlobal("fetch", fn);
+    await worker.scheduled({ cron: "0 22 * * *", scheduledTime: Date.parse("2026-06-12T22:00:00Z") } as any, e, ctx);
+    const adminCall = fn.mock.calls
+      .map((c: any[]) => { try { return JSON.parse(c[1].body); } catch { return {}; } })
+      .find((b: any) => b.chat_id === "999");
+    expect(adminCall).toBeFalsy();
+  });
 });

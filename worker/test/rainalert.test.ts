@@ -118,7 +118,7 @@ describe("runRainAlerts", () => {
     await e.USERS.put("100", JSON.stringify(SEOUL));
     const fn = stubFetch(RAIN_ITEMS);
     const res = await runRainAlerts(e, new Date("2026-06-17T20:00:00Z")); // KST 05:00
-    expect(res).toEqual({ sent: 0, checked: 0, skipped: 0 });
+    expect(res).toEqual({ sent: 0, checked: 0, skipped: 0, failed: 0 });
     expect(fn).not.toHaveBeenCalled();
   });
 

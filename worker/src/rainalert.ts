@@ -115,17 +115,17 @@ function keyToHours(k: string): number {
   return Date.UTC(+k.slice(0, 4), +k.slice(4, 6) - 1, +k.slice(6, 8), +k.slice(8, 10)) / 3600000;
 }
 
-export async function runRainAlerts(env: Env, now: Date): Promise<{ sent: number; checked: number; skipped: number }> {
+export async function runRainAlerts(env: Env, now: Date): Promise<{ sent: number; checked: number; skipped: number; failed: number }> {
   const kst = toKst(now);
   const hour = kst.getUTCHours();
   if (hour < QUIET_START || hour >= QUIET_END) {
-    return { sent: 0, checked: 0, skipped: 0 }; // 침묵 시간대(23~06 KST)
+    return { sent: 0, checked: 0, skipped: 0, failed: 0 }; // 침묵 시간대(23~06 KST)
   }
 
   const day = ymd(kst);
   const optedIn = (await listUsers(env)).filter(({ user }) => user.rainAlert);
   const ultraCache = new Map<string, UltraEntry[] | null>();
-  let subreq = 0, sent = 0, checked = 0, skipped = 0;
+  let subreq = 0, sent = 0, checked = 0, skipped = 0, failed = 0;
 
   for (const { chatId, user } of optedIn) {
     const seen = { ...(user.rainSeen ?? {}) };
@@ -141,7 +141,7 @@ export async function runRainAlerts(env: Env, now: Date): Promise<{ sent: number
 
       if (!ultraCache.has(gridKey)) {
         try { ultraCache.set(gridKey, await fetchUltraShort(env.DATA_GO_KR_KEY, grid.nx, grid.ny, now)); subreq++; }
-        catch (e) { console.error(`[ultra ${r.sigungu}]`, e instanceof Error ? e.message : e); ultraCache.set(gridKey, null); subreq++; }
+        catch (e) { console.error(`[ultra ${r.sigungu}]`, e instanceof Error ? e.message : e); ultraCache.set(gridKey, null); subreq++; failed++; }
       }
       const entries = ultraCache.get(gridKey);
       checked++;
@@ -160,7 +160,7 @@ export async function runRainAlerts(env: Env, now: Date): Promise<{ sent: number
         subreq++; sent++;
         seen[gridKey] = hourKey(day, rain.end); changed = true;
       } catch (e) {
-        console.error(`[rain-send ${chatId}]`, e instanceof Error ? e.message : e); subreq++;
+        console.error(`[rain-send ${chatId}]`, e instanceof Error ? e.message : e); subreq++; failed++;
       }
     }
 
@@ -170,5 +170,5 @@ export async function runRainAlerts(env: Env, now: Date): Promise<{ sent: number
     }
   }
 
-  return { sent, checked, skipped };
+  return { sent, checked, skipped, failed };
 }

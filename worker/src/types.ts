@@ -3,6 +3,7 @@ export interface Env {
   TELEGRAM_BOT_TOKEN: string;
   DATA_GO_KR_KEY: string;
   WEBHOOK_SECRET: string;
+  ADMIN_CHAT_ID?: string; // (선택) 설정 시 cron 이상 징후를 이 chatId로 경보
 }
 
 export interface Region {
