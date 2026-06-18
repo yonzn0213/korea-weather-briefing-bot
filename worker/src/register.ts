@@ -116,7 +116,7 @@ export async function handleMessage(env: Env, msg: TgMessage): Promise<void> {
 
   // 등록 유저의 일반 메시지 → 현황 안내
   await sendMessage(token, chatId,
-    `✅ 매일 아침 7시에 <b>${regionsLabel(user)}</b> 브리핑을 보내드리고 있어요.\n\n` +
+    `✅ 매일 아침 ${briefHourOf(user)}시에 <b>${regionsLabel(user)}</b> 브리핑을 보내드리고 있어요.\n\n` +
     "/region — 지역/설정 변경\n/rainalert — 실시간 비 알람 켜기·끄기\n/stop — 알림 해지");
 }
 
