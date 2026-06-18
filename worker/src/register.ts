@@ -11,8 +11,8 @@ export const BRIEF_SLOT_CAP = 35; // 비 알람과 예산을 나눠 쓰므로 50
 
 const WELCOME =
   "👋 안녕하세요! <b>전국 아침 브리핑 봇</b>이에요.\n" +
-  "매일 아침 7시, 선택하신 지역의 비 소식과 미세먼지를 알려드립니다.\n\n" +
-  "먼저 시/도를 선택해주세요 👇";
+  "매일 아침 원하는 시각에 비 소식·기온·미세먼지를 알려드립니다.\n\n" +
+  "먼저 시/도를 선택해주세요 👇 (지역 → 받는 시각 순으로 고르면 끝!)";
 
 function regionsLabel(user: User): string {
   return user.regions.map((r) => `${r.sido} ${r.sigungu}`).join(" · ");
@@ -268,11 +268,12 @@ export async function handleCallback(env: Env, cq: TgCallback): Promise<void> {
     await editMessageText(token, chatId, messageId, `📍 <b>${sido} ${sigungu}</b>로 설정했어요!`);
 
     if (isNew) {
-      const menu = settingsMenu(updated);
+      // 신규 가입: 지역 등록 직후 받는 시각까지 고르도록 이어붙인다(안 고르면 기본 7시).
+      const counts = await countByHour(env);
       await sendMessage(token, chatId,
-        `등록 완료! 내일 아침 7시부터 <b>${sigungu}</b> 브리핑을 보내드릴게요. 🌅\n` +
-        "지역을 하나 더 추가하거나 실시간 비 알람을 켤 수 있어요 👇",
-        { reply_markup: menu.keyboard });
+        `✅ <b>${sigungu}</b> 등록 완료!\n` +
+        "⏰ 마지막으로 브리핑 받을 시각을 골라주세요.\n(고르지 않으면 기본 7시, 나중에 /region 에서 변경할 수 있어요)",
+        { reply_markup: timeKeyboard(counts) });
     } else {
       const menu = settingsMenu(updated);
       await sendMessage(token, chatId, menu.text, { reply_markup: menu.keyboard });

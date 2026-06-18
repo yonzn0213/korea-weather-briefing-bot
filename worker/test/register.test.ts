@@ -94,6 +94,9 @@ describe("handleCallback", () => {
     expect(saved).not.toBeNull();
     expect(saved!.regions[0].sido).toBe("서울특별시");
     expect(bodies(fn).some((x) => x.url.includes("sendMessage") && x.body.text.includes("등록 완료"))).toBe(true);
+    // 신규 가입은 지역 직후 받는 시각 선택 키보드(bh:{hour})로 이어진다
+    const withTimeKb = bodies(fn).find((x) => x.url.includes("sendMessage") && x.body.reply_markup);
+    expect(withTimeKb.body.reply_markup.inline_keyboard.flat().some((b: any) => b.callback_data.startsWith("bh:"))).toBe(true);
   });
 
   it("pick:1 + r:1:.. -> 두 번째 지역 추가", async () => {
