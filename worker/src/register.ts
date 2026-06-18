@@ -1,4 +1,5 @@
-import type { Env, TgMessage, TgCallback } from "./types";
+import type { Env, TgMessage, TgCallback, User, InlineKeyboard } from "./types";
+import { MAX_REGIONS } from "./types";
 import { sidoKeyboard, sigunguKeyboard, resolveRegion } from "./regions";
 import { getUser, putUser, deleteUser } from "./store";
 import { sendMessage, answerCallback, editMessageText } from "./telegram";
@@ -8,11 +9,30 @@ const WELCOME =
   "매일 아침 7시, 선택하신 지역의 비 소식과 미세먼지를 알려드립니다.\n\n" +
   "먼저 시/도를 선택해주세요 👇";
 
-function help(region: string): string {
-  return (
-    `✅ 매일 아침 7시에 <b>${region}</b> 브리핑을 보내드리고 있어요.\n\n` +
-    "/region — 지역 변경\n/stop — 알림 해지"
-  );
+function regionsLabel(user: User): string {
+  return user.regions.map((r) => `${r.sido} ${r.sigungu}`).join(" · ");
+}
+
+// 설정 메뉴: 등록 지역 목록 + 지역 추가/변경/삭제 + 비 알람 토글
+function settingsMenu(user: User): { text: string; keyboard: InlineKeyboard } {
+  const lines = ["⚙️ <b>설정</b>", ""];
+  user.regions.forEach((r, i) => lines.push(`${i + 1}. ${r.sido} ${r.sigungu}`));
+  lines.push("");
+  lines.push(`🔔 실시간 비 알람: <b>${user.rainAlert ? "켜짐" : "꺼짐"}</b>`);
+  lines.push("");
+  lines.push("바꿀 항목을 선택해주세요 👇");
+
+  const rows: InlineKeyboard["inline_keyboard"] = [];
+  user.regions.forEach((r, i) => {
+    const row = [{ text: `✏️ ${i + 1}. ${r.sigungu} 변경`, callback_data: `pick:${i}` }];
+    if (user.regions.length > 1) row.push({ text: "🗑 삭제", callback_data: `del:${i}` });
+    rows.push(row);
+  });
+  if (user.regions.length < MAX_REGIONS) {
+    rows.push([{ text: "➕ 지역 추가", callback_data: `pick:${user.regions.length}` }]);
+  }
+  rows.push([{ text: `🔔 비 알람 ${user.rainAlert ? "끄기" : "켜기"}`, callback_data: "ra" }]);
+  return { text: lines.join("\n"), keyboard: { inline_keyboard: rows } };
 }
 
 export async function handleMessage(env: Env, msg: TgMessage): Promise<void> {
@@ -30,14 +50,35 @@ export async function handleMessage(env: Env, msg: TgMessage): Promise<void> {
   }
 
   const user = await getUser(env, chatId);
-  if (text === "/start" || text === "/region" || user === null) {
-    await sendMessage(token, chatId,
-      user === null ? WELCOME : "변경할 시/도를 선택해주세요 👇",
-      { reply_markup: sidoKeyboard() });
+
+  if (text === "/rainalert") {
+    if (user === null) {
+      await sendMessage(token, chatId, "먼저 /start 로 지역을 등록해주세요.");
+      return;
+    }
+    const next = !user.rainAlert;
+    await putUser(env, chatId, { ...user, rainAlert: next });
+    await sendMessage(token, chatId, next
+      ? "🔔 실시간 비 알람을 <b>켰어요</b>. 비가 다가오면 미리 알려드릴게요!"
+      : "🔕 실시간 비 알람을 <b>껐어요</b>.");
     return;
   }
 
-  await sendMessage(token, chatId, help(`${user.sido} ${user.sigungu}`));
+  if (user === null) {
+    await sendMessage(token, chatId, WELCOME, { reply_markup: sidoKeyboard(0) });
+    return;
+  }
+
+  if (text === "/start" || text === "/region") {
+    const menu = settingsMenu(user);
+    await sendMessage(token, chatId, menu.text, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  // 등록 유저의 일반 메시지 → 현황 안내
+  await sendMessage(token, chatId,
+    `✅ 매일 아침 7시에 <b>${regionsLabel(user)}</b> 브리핑을 보내드리고 있어요.\n\n` +
+    "/region — 지역/설정 변경\n/rainalert — 실시간 비 알람 켜기·끄기\n/stop — 알림 해지");
 }
 
 export async function handleCallback(env: Env, cq: TgCallback): Promise<void> {
@@ -47,17 +88,70 @@ export async function handleCallback(env: Env, cq: TgCallback): Promise<void> {
   const chatId = String(cq.message.chat.id);
   const messageId = cq.message.message_id;
 
-  if (data === "s:back") {
+  // 설정 메뉴로 돌아가기
+  if (data === "m") {
+    const user = await getUser(env, chatId);
     await answerCallback(token, cq.id);
-    await editMessageText(token, chatId, messageId, "시/도를 선택해주세요 👇", { reply_markup: sidoKeyboard() });
+    if (user) {
+      const menu = settingsMenu(user);
+      await editMessageText(token, chatId, messageId, menu.text, { reply_markup: menu.keyboard });
+    }
     return;
   }
 
+  // 비 알람 토글
+  if (data === "ra") {
+    const user = await getUser(env, chatId);
+    if (!user) { await answerCallback(token, cq.id, "먼저 /start 를 보내주세요."); return; }
+    const next = !user.rainAlert;
+    const updated = { ...user, rainAlert: next };
+    await putUser(env, chatId, updated);
+    await answerCallback(token, cq.id, next ? "비 알람 켜짐 🔔" : "비 알람 꺼짐 🔕");
+    const menu = settingsMenu(updated);
+    await editMessageText(token, chatId, messageId, menu.text, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  // 지역 추가/변경: 해당 slot의 시/도 선택으로 진입
+  if (data.startsWith("pick:")) {
+    const slot = Number(data.slice(5));
+    await answerCallback(token, cq.id);
+    await editMessageText(token, chatId, messageId, "시/도를 선택해주세요 👇", { reply_markup: sidoKeyboard(slot) });
+    return;
+  }
+
+  // 지역 삭제
+  if (data.startsWith("del:")) {
+    const slot = Number(data.slice(4));
+    const user = await getUser(env, chatId);
+    if (!user || user.regions.length <= 1 || !user.regions[slot]) {
+      await answerCallback(token, cq.id, "삭제할 수 없어요.");
+      return;
+    }
+    const removed = user.regions[slot].sigungu;
+    const updated = { ...user, regions: user.regions.filter((_, i) => i !== slot) };
+    await putUser(env, chatId, updated);
+    await answerCallback(token, cq.id, `${removed} 삭제됨`);
+    const menu = settingsMenu(updated);
+    await editMessageText(token, chatId, messageId, menu.text, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  // 뒤로(시군구 → 시/도 목록)
+  if (data.startsWith("b:")) {
+    const slot = Number(data.slice(2));
+    await answerCallback(token, cq.id);
+    await editMessageText(token, chatId, messageId, "시/도를 선택해주세요 👇", { reply_markup: sidoKeyboard(slot) });
+    return;
+  }
+
+  // 시/도 선택 → 시군구 키보드. 형식: s:{slot}:{sidoIdx}
   if (data.startsWith("s:")) {
-    const sidoIdx = Number(data.slice(2));
+    const parts = data.split(":");
+    const slot = Number(parts[1]);
     let kb;
     try {
-      kb = sigunguKeyboard(sidoIdx);
+      kb = sigunguKeyboard(slot, Number(parts[2]));
     } catch {
       await answerCallback(token, cq.id, "다시 시도해주세요.");
       return;
@@ -67,22 +161,45 @@ export async function handleCallback(env: Env, cq: TgCallback): Promise<void> {
     return;
   }
 
+  // 시군구 확정 → 저장. 형식: r:{slot}:{sidoIdx}:{sigunguIdx}
   if (data.startsWith("r:")) {
     const parts = data.split(":");
+    const slot = Number(parts[1]);
     let sido: string, sigungu: string;
     try {
-      [sido, sigungu] = resolveRegion(Number(parts[1]), Number(parts[2]));
+      [sido, sigungu] = resolveRegion(Number(parts[2]), Number(parts[3]));
     } catch {
       await answerCallback(token, cq.id, "알 수 없는 지역이에요.");
       return;
     }
-    const isNew = (await getUser(env, chatId)) === null;
-    await putUser(env, chatId, { sido, sigungu, name: cq.from?.first_name || "" });
+
+    const existing = await getUser(env, chatId);
+    const isNew = existing === null;
+    const regions = existing ? [...existing.regions] : [];
+    if (slot < regions.length) regions[slot] = { sido, sigungu };       // 변경
+    else if (regions.length < MAX_REGIONS) regions.push({ sido, sigungu }); // 추가
+    else regions[MAX_REGIONS - 1] = { sido, sigungu };                  // 한도 초과 방어
+
+    const updated: User = {
+      regions,
+      name: existing?.name || cq.from?.first_name || "",
+      rainAlert: existing?.rainAlert ?? false,
+      ...(existing?.rainSeen ? { rainSeen: existing.rainSeen } : {}),
+    };
+    await putUser(env, chatId, updated);
     await answerCallback(token, cq.id, `${sigungu} 설정 완료!`);
     await editMessageText(token, chatId, messageId, `📍 <b>${sido} ${sigungu}</b>로 설정했어요!`);
-    await sendMessage(token, chatId, isNew
-      ? `등록 완료! 내일 아침 7시부터 <b>${sigungu}</b> 브리핑을 보내드릴게요. 🌅\n지역 변경은 /region, 해지는 /stop`
-      : `이제부터 <b>${sigungu}</b> 기준으로 알려드릴게요!`);
+
+    if (isNew) {
+      const menu = settingsMenu(updated);
+      await sendMessage(token, chatId,
+        `등록 완료! 내일 아침 7시부터 <b>${sigungu}</b> 브리핑을 보내드릴게요. 🌅\n` +
+        "지역을 하나 더 추가하거나 실시간 비 알람을 켤 수 있어요 👇",
+        { reply_markup: menu.keyboard });
+    } else {
+      const menu = settingsMenu(updated);
+      await sendMessage(token, chatId, menu.text, { reply_markup: menu.keyboard });
+    }
     return;
   }
 

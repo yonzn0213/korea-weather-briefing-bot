@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { dustFor, buildMessage, gradePm10, rotateByDate, parseWeatherItems, resolveLowHigh, formatHourly, clothingFor, clothingRange, pickLuckyColor, LUCKY_COLORS } from "../src/briefing";
+import { dustFor, buildMessage, gradePm10, rotateByDate, parseWeatherItems, resolveLowHigh, formatHourly, hourEmoji, clothingFor, clothingRange, pickLuckyColor, LUCKY_COLORS } from "../src/briefing";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -42,7 +42,7 @@ describe("gradePm10", () => {
 
 describe("buildMessage", () => {
   const now = new Date("2026-06-12T22:00:00Z"); // KST 06-13 07:00
-  const W = { popMax: 80, rainHours: [["1400", "비"], ["1500", "비"]] as [string, string][], tmn: 19, tmx: 26, sky: "흐림 ☁️", hourly: { "0600": 19, "0900": 22, "1200": 25, "1500": 26, "1800": 24, "2100": 21 } };
+  const W = { popMax: 80, rainHours: [["1400", "비"], ["1500", "비"]] as [string, string][], tmn: 19, tmx: 26, sky: "흐림 ☁️", hourly: { "0600": 19, "0900": 22, "1200": 25, "1500": 26, "1800": 24, "2100": 21 }, hourlySky: { "0600": "1", "1200": "4" }, hourlyPty: { "1500": "1" } };
 
   it("제목은 시군구, 비/온도/하늘 포함", () => {
     const msg = buildMessage(now, "경기도", "수원시", W, { pm10: 45, pm25: 22 }, false);
@@ -64,12 +64,14 @@ describe("buildMessage", () => {
   });
   it("시간대별·옷차림·행운색 줄 포함", () => {
     const msg = buildMessage(now, "경기도", "수원시", W, { pm10: 45, pm25: 22 }, false, () => 0);
-    expect(msg).toContain("⏰ 6시 19°");
+    expect(msg).toContain("⏰");
+    expect(msg).toContain("시간대별");
+    expect(msg).toContain("6시");
     expect(msg).toContain("👕 옷차림:");
     expect(msg).toContain("🎨 오늘의 행운 색: " + LUCKY_COLORS[0]);
   });
   it("TMN/TMX 없으면 hourly로 최저/최고 fallback", () => {
-    const wf = { popMax: 0, rainHours: [] as [string, string][], tmn: null, tmx: null, sky: null, hourly: { "0600": 19, "1500": 32 } };
+    const wf = { popMax: 0, rainHours: [] as [string, string][], tmn: null, tmx: null, sky: null, hourly: { "0600": 19, "1500": 32 }, hourlySky: {}, hourlyPty: {} };
     const msg = buildMessage(now, "경기도", "수원시", wf, { pm10: 45, pm25: 22 }, false, () => 0);
     expect(msg).toContain("최저 19°C");
     expect(msg).toContain("최고 32°C");
@@ -121,16 +123,40 @@ describe("parseWeatherItems", () => {
   });
 });
 
+describe("hourEmoji", () => {
+  it("강수(PTY)가 있으면 강수 우선", () => {
+    expect(hourEmoji("4", "1")).toContain("비"); // SKY 흐림이어도 비 우선
+  });
+  it("강수 없으면 하늘(SKY) 상태", () => {
+    expect(hourEmoji("1", "0")).toContain("맑음");
+    expect(hourEmoji("4", undefined)).toContain("흐림");
+  });
+  it("매핑 정보 없으면 빈 문자열", () => {
+    expect(hourEmoji(undefined, undefined)).toBe("");
+    expect(hourEmoji("9", "0")).toBe("");
+  });
+});
+
 describe("formatHourly", () => {
-  it("6·9·12·15·18·21시만, 소수 반올림", () => {
-    const s = formatHourly({ "0600": 18.4, "0900": 21, "1200": 25, "1500": 26, "1800": 23, "2100": 20, "0700": 19 });
-    expect(s).toBe("⏰ 6시 18° · 9시 21° · 12시 25° · 15시 26° · 18시 23° · 21시 20°");
+  const W = (hourly: Record<string, number>, sky: Record<string, string> = {}, pty: Record<string, string> = {}) =>
+    ({ hourly, hourlySky: sky, hourlyPty: pty } as any);
+
+  it("시간별로 행을 나누고 기온을 반올림해 표시", () => {
+    const s = formatHourly(W({ "0600": 18.4, "0900": 21, "1200": 25, "1500": 26, "1800": 23, "2100": 20, "0700": 19 }));
+    expect(s).toContain("⏰");
+    expect(s).toContain("6시");
+    expect(s).toContain("18°"); // 18.4 반올림
+    expect(s).toContain("21°");
+    expect(s).not.toContain("19°"); // 0700은 슬롯 외 → 제외
+    expect(s.split("\n").length).toBeGreaterThanOrEqual(6); // 헤더 + 6개 행
   });
-  it("일부 시간만 있으면 있는 것만", () => {
-    expect(formatHourly({ "0900": 21, "1500": 26 })).toBe("⏰ 9시 21° · 15시 26°");
+  it("시간별 이모지 표시 (강수 우선)", () => {
+    const s = formatHourly(W({ "0600": 19, "1500": 26 }, { "0600": "1", "1500": "4" }, { "1500": "1" }));
+    expect(s).toContain("☀️"); // 0600 맑음
+    expect(s).toContain("🌧"); // 1500 비(PTY 우선)
   });
-  it("해당 시간 없으면 빈 문자열", () => {
-    expect(formatHourly({ "0700": 19 })).toBe("");
+  it("기온 슬롯이 하나도 없으면 빈 문자열", () => {
+    expect(formatHourly(W({ "0700": 19 }))).toBe("");
   });
 });
 

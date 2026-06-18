@@ -19,20 +19,21 @@ function rows(buttons: InlineButton[], cols = 3): InlineButton[][] {
   return out;
 }
 
-export function sidoKeyboard(): InlineKeyboard {
-  const buttons = SIDO_LIST.map((s, i) => ({ text: s, callback_data: `s:${i}` }));
+// slot: 어느 지역 칸(0=첫째, 1=둘째)을 설정 중인지. 콜백에 실어 등록 흐름을 구분한다.
+export function sidoKeyboard(slot: number): InlineKeyboard {
+  const buttons = SIDO_LIST.map((s, i) => ({ text: s, callback_data: `s:${slot}:${i}` }));
   return { inline_keyboard: rows(buttons) };
 }
 
-export function sigunguKeyboard(sidoIdx: number): InlineKeyboard {
+export function sigunguKeyboard(slot: number, sidoIdx: number): InlineKeyboard {
   const sido = SIDO_LIST[sidoIdx];
   if (sido === undefined) throw new RangeError(`잘못된 시도 인덱스: ${sidoIdx}`);
   const buttons = sigunguNames(sido).map((n, j) => ({
     text: n,
-    callback_data: `r:${sidoIdx}:${j}`,
+    callback_data: `r:${slot}:${sidoIdx}:${j}`,
   }));
   const kb = rows(buttons);
-  kb.push([{ text: "⬅ 뒤로", callback_data: "s:back" }]);
+  kb.push([{ text: "⬅ 뒤로", callback_data: `b:${slot}` }]);
   return { inline_keyboard: kb };
 }
 

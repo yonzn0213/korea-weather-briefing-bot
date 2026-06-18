@@ -18,7 +18,7 @@ function env(): Env {
   return { USERS: fakeKV(), TELEGRAM_BOT_TOKEN: "t", DATA_GO_KR_KEY: "k", WEBHOOK_SECRET: "s" };
 }
 
-const U: User = { sido: "서울특별시", sigungu: "강남구", name: "철수" };
+const U: User = { regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수", rainAlert: false };
 
 describe("store", () => {
   it("put -> get 라운드트립", async () => {
@@ -42,9 +42,24 @@ describe("store", () => {
   it("listUsers 전체 반환", async () => {
     const e = env();
     await putUser(e, "1", U);
-    await putUser(e, "2", { ...U, sigungu: "서초구" });
+    await putUser(e, "2", { ...U, regions: [{ sido: "서울특별시", sigungu: "서초구" }] });
     const all = await listUsers(e);
     expect(all.length).toBe(2);
     expect(all.map((x) => x.chatId).sort()).toEqual(["1", "2"]);
+  });
+
+  it("레거시 단일 지역 스키마를 regions[]로 변환해 읽는다", async () => {
+    const e = env();
+    // 예전 버전이 저장한 형태
+    await e.USERS.put("9", JSON.stringify({ sido: "부산광역시", sigungu: "해운대구", name: "영희" }));
+    const u = await getUser(e, "9");
+    expect(u).toEqual({ regions: [{ sido: "부산광역시", sigungu: "해운대구" }], name: "영희", rainAlert: false });
+  });
+
+  it("두 지역 유저도 그대로 읽는다", async () => {
+    const e = env();
+    const two: User = { regions: [{ sido: "서울특별시", sigungu: "강남구" }, { sido: "부산광역시", sigungu: "해운대구" }], name: "철수", rainAlert: true };
+    await putUser(e, "5", two);
+    expect(await getUser(e, "5")).toEqual(two);
   });
 });

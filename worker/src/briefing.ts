@@ -8,6 +8,18 @@ const PTY_LABEL: Record<string, string> = {
 };
 const SKY_LABEL: Record<string, string> = { "1": "맑음 ☀️", "3": "구름많음 ⛅", "4": "흐림 ☁️" };
 
+// 시간대별 표용 이모지+라벨. 강수(PTY)가 있으면 강수 우선, 없으면 하늘(SKY) 상태.
+const PTY_EMOJI: Record<string, string> = {
+  "1": "🌧 비", "2": "🌨 비/눈", "3": "❄️ 눈", "4": "🌦 소나기", "5": "🌧 빗방울", "6": "🌨 진눈깨비", "7": "❄️ 눈날림",
+};
+const SKY_EMOJI: Record<string, string> = { "1": "☀️ 맑음", "3": "⛅ 구름많음", "4": "☁️ 흐림" };
+
+export function hourEmoji(sky: string | undefined, pty: string | undefined): string {
+  if (pty && pty !== "0" && PTY_EMOJI[pty]) return PTY_EMOJI[pty];
+  if (sky && SKY_EMOJI[sky]) return SKY_EMOJI[sky];
+  return "";
+}
+
 const MAX_SUBREQUESTS = 45; // 무료 50 한도 안전 마진
 const HOURLY_SLOTS = ["0600", "0900", "1200", "1500", "1800", "2100"];
 export const LUCKY_COLORS = [
@@ -22,15 +34,17 @@ export interface Weather {
   tmx: number | null;
   sky: string | null;
   hourly: Record<string, number>;
+  hourlySky: Record<string, string>; // 시간(HHMM) → SKY 코드
+  hourlyPty: Record<string, string>; // 시간(HHMM) → PTY 코드
 }
 export interface DustVal { pm10: number | null; pm25: number | null; }
 export interface Dust { stations: Record<string, DustVal>; avg: DustVal; }
 
 // now(UTC) -> KST Date (UTC 필드가 KST 값을 갖도록 +9h 시프트)
-function toKst(now: Date): Date {
+export function toKst(now: Date): Date {
   return new Date(now.getTime() + 9 * 3600 * 1000);
 }
-function ymd(kst: Date): string {
+export function ymd(kst: Date): string {
   const y = kst.getUTCFullYear();
   const m = String(kst.getUTCMonth() + 1).padStart(2, "0");
   const d = String(kst.getUTCDate()).padStart(2, "0");
@@ -46,16 +60,16 @@ function baseDateTime(kst: Date): [string, string] {
 }
 
 export function parseWeatherItems(items: any[], today: string): Weather {
-  const data: Weather = { popMax: 0, rainHours: [], tmn: null, tmx: null, sky: null, hourly: {} };
+  const data: Weather = { popMax: 0, rainHours: [], tmn: null, tmx: null, sky: null, hourly: {}, hourlySky: {}, hourlyPty: {} };
   for (const it of items) {
     if (it.fcstDate !== today) continue;
     const { category: cat, fcstValue: val, fcstTime: t } = it;
     if (cat === "POP") data.popMax = Math.max(data.popMax, parseInt(val, 10));
-    else if (cat === "PTY" && val !== "0") data.rainHours.push([t, PTY_LABEL[val] || "강수"]);
+    else if (cat === "PTY") { data.hourlyPty[t] = val; if (val !== "0") data.rainHours.push([t, PTY_LABEL[val] || "강수"]); }
     else if (cat === "TMN") data.tmn = parseFloat(val);
     else if (cat === "TMX") data.tmx = parseFloat(val);
     else if (cat === "TMP") { const v = parseFloat(val); if (!Number.isNaN(v)) data.hourly[t] = v; }
-    else if (cat === "SKY" && t === "1200") data.sky = SKY_LABEL[val] || "";
+    else if (cat === "SKY") { data.hourlySky[t] = val; if (t === "1200") data.sky = SKY_LABEL[val] || ""; }
   }
   return data;
 }
@@ -126,11 +140,18 @@ export function resolveLowHigh(w: Weather): [number | null, number | null] {
   return [low, high];
 }
 
-export function formatHourly(hourly: Record<string, number>): string {
-  const parts = HOURLY_SLOTS
-    .filter((t) => hourly[t] !== undefined)
-    .map((t) => `${parseInt(t.slice(0, 2), 10)}시 ${Math.round(hourly[t])}°`);
-  return parts.length ? "⏰ " + parts.join(" · ") : "";
+// 시간대별 날씨를 행으로 나눠 표시. 각 행: "HH시  기온°  이모지 라벨"
+// <pre>로 감싸 고정폭 정렬(텔레그램 HTML)을 확보한다.
+export function formatHourly(w: Weather): string {
+  const slots = HOURLY_SLOTS.filter((t) => w.hourly[t] !== undefined);
+  if (slots.length === 0) return "";
+  const rows = slots.map((t) => {
+    const hour = String(parseInt(t.slice(0, 2), 10)).padStart(2, " ");
+    const temp = `${Math.round(w.hourly[t])}°`.padStart(4, " ");
+    const emo = hourEmoji(w.hourlySky[t], w.hourlyPty[t]);
+    return `${hour}시 ${temp}  ${emo}`.trimEnd();
+  });
+  return "⏰ <b>시간대별</b>\n<pre>" + rows.join("\n") + "</pre>";
 }
 
 // 표준 기온별 옷차림 표 (낮은 기온일수록 두꺼운 옷)
@@ -195,11 +216,10 @@ export function buildMessage(
     if (low !== null) temp.push(`최저 ${Math.round(low)}°C`);
     if (high !== null) temp.push(`최고 ${Math.round(high)}°C`);
     if (temp.length) lines.push("🌡 " + temp.join(" / "));
-    const hourly = formatHourly(w.hourly);
+    const hourly = formatHourly(w);
     if (hourly) lines.push(hourly);
     const clothing = clothingRange(low, high);
     if (clothing) lines.push("👕 옷차림: " + clothing);
-    if (w.sky) lines.push(`하늘: ${w.sky}`);
   } else {
     lines.push("⚠️ 날씨 정보를 불러오지 못했어요.");
   }
@@ -239,19 +259,24 @@ export async function runBriefing(env: Env, now: Date): Promise<{ sent: number; 
   let subreq = 0;
   let sent = 0, failed = 0, skipped = 0;
 
-  for (let i = 0; i < ordered.length; i++) {
-    const { chatId, user } = ordered[i];
-    const { sido, sigungu } = user;
-    if (!REGIONS[sido] || !REGIONS[sido].sigungu[sigungu]) continue;
+  // (유저, 지역) 단위로 펼침 — 등록 지역마다 메시지 1개. 유저 회전 순서는 유지.
+  const jobs: { chatId: string; sido: string; sigungu: string }[] = [];
+  for (const { chatId, user } of ordered) {
+    for (const r of user.regions) {
+      if (REGIONS[r.sido]?.sigungu[r.sigungu]) jobs.push({ chatId, sido: r.sido, sigungu: r.sigungu });
+    }
+  }
 
+  for (let i = 0; i < jobs.length; i++) {
+    const { chatId, sido, sigungu } = jobs[i];
     const g = REGIONS[sido].sigungu[sigungu];
     const gridKey = `${g.nx},${g.ny}`;
     const airkorea = REGIONS[sido].airkorea;
 
     const need = (weatherCache.has(gridKey) ? 0 : 1) + (dustCache.has(airkorea) ? 0 : 1) + 1;
     if (subreq + need > MAX_SUBREQUESTS) {
-      skipped = ordered.length - i;
-      console.warn(`subrequest 예산 도달: ${skipped}명 이번 회차 건너뜀`);
+      skipped = jobs.length - i;
+      console.warn(`subrequest 예산 도달: ${skipped}건 이번 회차 건너뜀`);
       break;
     }
 
