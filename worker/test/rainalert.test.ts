@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
-  ultraBase, parseUltraItems, nextRain, rainAlertMessage, runRainAlerts,
+  ultraBase, parseUltraItems, parseRn1, intensityWord, detectRain, rainAlertMessage, runRainAlerts,
 } from "../src/rainalert";
 import { getUser } from "../src/store";
 import type { Env, User } from "../src/types";
@@ -19,39 +19,63 @@ describe("ultraBase", () => {
   });
 });
 
+describe("parseRn1", () => {
+  it("강수없음은 0", () => expect(parseRn1("강수없음")).toBe(0));
+  it("'1.0mm'는 1.0", () => expect(parseRn1("1.0mm")).toBe(1.0));
+  it("'1mm 미만'은 숫자만", () => expect(parseRn1("1mm 미만")).toBe(1));
+  it("'0'은 0", () => expect(parseRn1("0")).toBe(0));
+});
+
+describe("intensityWord", () => {
+  it("3mm 미만 약한", () => expect(intensityWord(1)).toBe("약한"));
+  it("3~15mm 보통(형용사 없음)", () => expect(intensityWord(5)).toBe(""));
+  it("15mm 이상 강한", () => expect(intensityWord(20)).toBe("강한"));
+  it("정보 없으면 빈 문자열", () => expect(intensityWord(null)).toBe(""));
+});
+
 describe("parseUltraItems", () => {
   const items = [
     { category: "PTY", fcstDate: "20260618", fcstTime: "1000", fcstValue: "0" },
     { category: "PTY", fcstDate: "20260618", fcstTime: "1100", fcstValue: "1" },
-    { category: "T1H", fcstDate: "20260618", fcstTime: "1100", fcstValue: "20" }, // PTY 아님 → 제외
-    { category: "PTY", fcstDate: "20260619", fcstTime: "0100", fcstValue: "1" },  // 내일 → 제외
+    { category: "RN1", fcstDate: "20260618", fcstTime: "1100", fcstValue: "2.0mm" }, // 같은 시각 RN1 병합
+    { category: "T1H", fcstDate: "20260618", fcstTime: "1100", fcstValue: "20" },    // 그 외 카테고리 무시
+    { category: "PTY", fcstDate: "20260619", fcstTime: "0100", fcstValue: "1" },     // 내일 → 제외
   ];
-  it("오늘 PTY만 시간순으로 수집", () => {
+  it("PTY+RN1을 시간별로 병합해 수집", () => {
     expect(parseUltraItems(items, "20260618")).toEqual([
-      { hour: 10, pty: "0" }, { hour: 11, pty: "1" },
+      { hour: 10, pty: "0", rn1: null },
+      { hour: 11, pty: "1", rn1: 2.0 },
     ]);
   });
 });
 
-describe("nextRain", () => {
-  const e = [{ hour: 10, pty: "0" }, { hour: 11, pty: "1" }, { hour: 13, pty: "1" }];
-  it("향후 2시간 내 가장 이른 강수", () => {
-    expect(nextRain(e, 10, 2)).toEqual({ hour: 11, label: "비" });
+describe("detectRain", () => {
+  const e = [
+    { hour: 10, pty: "0", rn1: 0 }, { hour: 11, pty: "1", rn1: 1 },
+    { hour: 12, pty: "1", rn1: 20 }, { hour: 13, pty: "0", rn1: 0 },
+  ];
+  it("향후 1시간 내 시작 + 연속 구간(end) + 최대 강도", () => {
+    expect(detectRain(e, 10, 1)).toEqual({ start: 11, end: 12, label: "비", intensity: "강한" });
   });
   it("창 밖의 강수는 무시", () => {
-    expect(nextRain(e, 10, 0)).toBeNull(); // 10시만 보고 → 강수 없음
+    expect(detectRain(e, 10, 0)).toBeNull(); // 10시만 보고 → 강수 없음
   });
   it("강수 없으면 null", () => {
-    expect(nextRain([{ hour: 11, pty: "0" }], 10, 2)).toBeNull();
+    expect(detectRain([{ hour: 11, pty: "0", rn1: 0 }], 10, 1)).toBeNull();
   });
 });
 
 describe("rainAlertMessage", () => {
-  it("미래 시각은 'HH시경'", () => {
-    expect(rainAlertMessage("강남구", { hour: 13, label: "비" }, 11)).toContain("13시경");
+  it("미래 시작은 'HH시~끝시' 구간 + 강도", () => {
+    const m = rainAlertMessage("강남구", { start: 13, end: 14, label: "비", intensity: "강한" }, 11);
+    expect(m).toContain("13시~15시");
+    expect(m).toContain("강한 비");
   });
-  it("현재/지난 시각은 '곧'", () => {
-    expect(rainAlertMessage("강남구", { hour: 11, label: "비" }, 11)).toContain("곧");
+  it("현재/지난 시작은 '곧'", () => {
+    expect(rainAlertMessage("강남구", { start: 11, end: 11, label: "비", intensity: "" }, 11)).toContain("곧");
+  });
+  it("강수확률 % 는 넣지 않는다", () => {
+    expect(rainAlertMessage("강남구", { start: 13, end: 13, label: "비", intensity: "" }, 11)).not.toContain("%");
   });
 });
 
@@ -118,15 +142,27 @@ describe("runRainAlerts", () => {
     expect(Object.keys(saved!.rainSeen ?? {}).length).toBe(1);
   });
 
-  it("쿨다운 내 재실행은 중복 발송 안 함", async () => {
+  it("같은 비(연속) 재실행은 중복 발송 안 함", async () => {
     const e = env();
     await e.USERS.put("100", JSON.stringify(SEOUL));
     stubFetch(RAIN_ITEMS);
     await runRainAlerts(e, NOW_ACTIVE);
     const fn2 = stubFetch(RAIN_ITEMS);
-    const res = await runRainAlerts(e, NOW_ACTIVE); // 같은 시각 → 쿨다운
+    const res = await runRainAlerts(e, NOW_ACTIVE); // 같은 비 → 에피소드 중복
     expect(res.sent).toBe(0);
     expect(sends(fn2).length).toBe(0);
+  });
+
+  it("마른 시간 뒤 새 비는 다시 알림", async () => {
+    const e = env();
+    await e.USERS.put("100", JSON.stringify(SEOUL));
+    stubFetch(RAIN_ITEMS); // KST10, 11시 비 → end=11 저장
+    await runRainAlerts(e, NOW_ACTIVE);
+    // KST15, 16시 비(저장된 11시보다 늦은 새 에피소드)
+    const later = new Date("2026-06-18T06:00:00Z"); // KST 15:00
+    stubFetch([{ category: "PTY", fcstDate: "20260618", fcstTime: "1600", fcstValue: "1" }]);
+    const res = await runRainAlerts(e, later);
+    expect(res.sent).toBe(1);
   });
 
   it("강수 예보가 없으면 발송 안 함", async () => {
