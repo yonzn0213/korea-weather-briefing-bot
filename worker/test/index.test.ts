@@ -56,3 +56,36 @@ describe("fetch webhook", () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe("scheduled cron 분기", () => {
+  function stubApis() {
+    const fn = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes("getVilageFcst")) return new Response(JSON.stringify({ response: { body: { items: { item: [] } } } }));
+      if (u.includes("getUltraSrtFcst")) return new Response(JSON.stringify({ response: { body: { items: { item: [] } } } }));
+      if (u.includes("ArpltnInforInqireSvc")) return new Response(JSON.stringify({ response: { body: { items: [] } } }));
+      return new Response(JSON.stringify({ ok: true, result: {} }));
+    });
+    vi.stubGlobal("fetch", fn);
+    return fn;
+  }
+  const calledWith = (fn: any, needle: string) => fn.mock.calls.some((c: any[]) => String(c[0]).includes(needle));
+
+  it("아침 cron은 일일 브리핑(getVilageFcst) 실행", async () => {
+    const e = env();
+    await e.USERS.put("1", JSON.stringify({ regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수", rainAlert: true }));
+    const fn = stubApis();
+    await worker.scheduled({ cron: "0 22 * * *", scheduledTime: Date.parse("2026-06-12T22:00:00Z") } as any, e, ctx);
+    expect(calledWith(fn, "getVilageFcst")).toBe(true);
+    expect(calledWith(fn, "getUltraSrtFcst")).toBe(false);
+  });
+
+  it("매시간 cron은 실시간 비 알람(getUltraSrtFcst) 실행", async () => {
+    const e = env();
+    await e.USERS.put("1", JSON.stringify({ regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수", rainAlert: true }));
+    const fn = stubApis();
+    await worker.scheduled({ cron: "0 * * * *", scheduledTime: Date.parse("2026-06-18T01:00:00Z") } as any, e, ctx);
+    expect(calledWith(fn, "getUltraSrtFcst")).toBe(true);
+    expect(calledWith(fn, "getVilageFcst")).toBe(false);
+  });
+});
