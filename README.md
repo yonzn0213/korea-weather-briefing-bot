@@ -44,12 +44,12 @@
 1. 텔레그램에서 **[@korea_weather_briefing_bot](https://t.me/korea_weather_briefing_bot)** 검색
 2. **/start** 전송 → **즉시** 도착하는 버튼에서 **시/도 → 세부 시/군/구** 선택
 3. 다음 날 아침 7시부터 매일 브리핑이 도착합니다.
-4. (선택) **/region** 설정 메뉴에서 **지역 한 개 더 추가**(최대 2개)하거나 **실시간 비 알람**을 켤 수 있습니다.
+4. (선택) **/region** 설정 메뉴에서 **지역 추가**(최대 2개)·**받는 시각 변경**(05~10시)·**실시간 비 알람**을 켤 수 있습니다.
 
 | 명령어 | 기능 |
 |--------|------|
 | `/start` | 알림 시작 / 지역 선택 |
-| `/region` | 설정 메뉴 — 지역 추가·변경·삭제, 비 알람 토글 |
+| `/region` | 설정 메뉴 — 지역 추가·변경·삭제, **받는 시각**, 비 알람 토글 |
 | `/rainalert` | 실시간 비 알람 켜기·끄기 |
 | `/stop` | 알림 해지 |
 
@@ -65,7 +65,7 @@
 | 스케줄 | Workers Cron Triggers |
 | 메시징 | Telegram Bot API (Webhook) |
 | 외부 데이터 | 기상청 단기예보·초단기예보 API · 에어코리아 대기오염 API (공공데이터포털) |
-| 테스트 | Vitest (106 tests, TDD) |
+| 테스트 | Vitest (109 tests, TDD) |
 | 데이터 생성 | Python (기상청 LCC 좌표 변환 스크립트) |
 
 ---
@@ -79,17 +79,16 @@
                     │  ├─ /start·/region·/rainalert·/stop·콜백 라우팅              │──▶ Telegram API
                     │  └─ 유저 등록/변경/해지(지역 최대 2개)    ┌────────────┐     │   (즉시 응답)
                     │                                          │ KV (USERS) │     │
-  Cron(22:00 UTC)──▶│ scheduled() — 아침 브리핑                 │ chatId→유저 │     │
-  = KST 07:00       │  ├─ 전 유저 조회 (KV list)         ◀────▶└────────────┘     │
-                    │  ├─ 날씨(격자별)·미세먼지(시도별) 캐싱 조회 ───────────────────│──▶ 기상청 / 에어코리아
-                    │  └─ subrequest 예산 내에서 지역별 발송                        │──▶ Telegram API
-  Cron(매시간)──────▶│ scheduled() — 실시간 비 알람(옵트인, 06~22 KST)               │──▶ 기상청(초단기)
-                    │  └─ rainAlert 유저만 초단기예보 점검, 1h내 비 예상 시 발송     │──▶ Telegram API
+  Cron(매시간)──────▶│ scheduled() — 매 정시(KST)                │ chatId→유저 │     │
+                    │  ├─ ①briefHour==현재시각 유저 브리핑 ◀────▶└────────────┘     │
+                    │  │   날씨(격자별)·미세먼지(시도별) 캐싱 조회 ──────────────────│──▶ 기상청 / 에어코리아
+                    │  ├─ ②rainAlert 유저 비 알람(06~22, 초단기) ──────────────────│──▶ 기상청(초단기)
+                    │  └─ subrequest 예산 가드 + 이상 시 운영 경보                   │──▶ Telegram API
                     └────────────────────────────────────────────────────────────┘
 ```
 
 - **단일 Worker**가 두 진입점(`fetch` = webhook, `scheduled` = cron)을 담당.
-- 등록 흐름은 webhook으로 **즉시** 처리, 일일 브리핑은 아침 Cron, 실시간 비 알람은 매시간 Cron(`event.cron`으로 분기)으로 발송.
+- 등록은 webhook으로 **즉시** 처리. **매시간 cron 하나**가 그 시각(KST)을 받는 시각으로 고른 유저에게 브리핑하고, 옵트인 유저에게 비 알람을 보낸다 — 시각 분산으로 cron 추가 없이 수용 인원을 늘린다.
 
 ---
 
@@ -145,6 +144,9 @@ Cloudflare Workers 무료 플랜은 **요청당 subrequest 50개** 제한이 있
 ### 10. 데이터 모델 진화: 단일 지역 → 지역 배열(무중단 마이그레이션)
 지역 2개 지원을 위해 `User`를 `{sido, sigungu}`에서 `regions[]`로 바꾸되, **일괄 마이그레이션 없이** 읽기 시점에 레거시 스키마를 자동 변환(`normalizeUser`)해 기존 등록 유저가 끊기지 않도록 했다. 아침 브리핑은 (유저, 지역) 단위로 펼쳐 **지역마다 메시지 1개**를 보낸다.
 
+### 11. 시각 분산으로 무료 한도 우회 (받는 시각 선택)
+무료 플랜 한도는 "하루 총량"이 아니라 **한 번의 실행당 subrequest 50개**다. 모든 유저를 아침 7시 cron 한 번에 몰면 캐싱 후에도 ~40명이 천장이었다. 그래서 유저가 **받는 시각(`briefHour`, 05~10시)을 직접 고르게** 하고, **매시간 cron 하나**가 "지금 KST 시각 == briefHour"인 유저만 처리하도록 라우팅했다. 시각마다 별개 실행이라 각자 50 예산을 새로 받아 **cron 추가 없이** 수용 인원이 시각 수만큼 늘어난다(동시에 페르소나가 가장 많이 요청한 "발송 시각 선택"도 해결). 정원 표시·제한은 KV의 최종일관성을 감안해 **락 없는 느슨한 방식**(메뉴 열 때 1회 스캔해 근사 표시, `BRIEF_SLOT_CAP` 초과 시 거부)으로 두되, 경합으로 1~2명 초과해도 발송 시 subrequest 가드가 흡수하므로 정확한 카운터(Durable Objects 등)는 쓰지 않았다.
+
 ---
 
 ## ✅ 테스트 & 품질
@@ -160,8 +162,8 @@ Cloudflare Workers 무료 플랜은 **요청당 subrequest 50개** 제한이 있
 
 | 파일 | 역할 |
 |------|------|
-| `worker/src/index.ts` | 진입점 — `fetch`(webhook 검증·라우팅) + `scheduled`(cron 분기: 아침 브리핑 / 비 알람) + 운영 자가감시 경보 |
-| `worker/src/register.ts` | 시도/시군구 등록·변경·해지(지역 최대 2개) + 설정 메뉴 + 비 알람 토글 |
+| `worker/src/index.ts` | 진입점 — `fetch`(webhook 검증·라우팅) + `scheduled`(매시간: 해당 시각 브리핑 + 비 알람) + 운영 자가감시 경보 |
+| `worker/src/register.ts` | 시도/시군구 등록·변경·해지(지역 최대 2개) + 설정 메뉴 + 받는 시각(정원·soft cap) + 비 알람 토글 |
 | `worker/src/briefing.ts` | 지역별 날씨/미세먼지 브리핑(시간대별 이모지 포함) + subrequest 예산·회전 |
 | `worker/src/rainalert.ts` | 초단기예보 기반 실시간 비 알람(옵트인, 1h 룩어헤드·침묵 시간·에피소드 중복방지) |
 | `worker/src/regions.ts` | `regions.json` 로드 + 인라인 키보드(slot) + 콜백 해석 |
@@ -216,10 +218,10 @@ curl "https://api.telegram.org/bot<토큰>/setWebhook" \
 - **즉시성**: webhook이라 `/start`·지역 선택이 바로 처리됩니다.
 - **개인정보**: 유저 목록은 Cloudflare KV에 비공개 저장(저장소 노출 없음).
 - **보안**: 봇 토큰·인증키는 `wrangler secret`에만 저장하고 코드·저장소에 커밋하지 않습니다(`.dev.vars`는 `.gitignore`). webhook은 `secret_token` 헤더로 검증합니다.
-- **무료 한도**: Workers 무료 플랜은 요청당 subrequest 50개라 일일 브리핑은 캐싱 후 약 **40~45명**까지 안전(초과 시 회차 건너뜀 + 로그). 확장은 유료($5/월) 또는 Cloudflare Queues.
+- **무료 한도 & 시각 분산**: Workers 무료 플랜은 **한 번의 실행당** subrequest 50개라, 한 시각에 몰리면 캐싱 후 약 40명대가 한계. 그래서 유저가 **받는 시각(05~10시)을 고르면** 시각별로 cron 실행이 나뉘어 각자 새 50 예산을 받아 수용 인원이 늘어난다(시각당 정원 `BRIEF_SLOT_CAP`). 초과 시엔 여전히 회차 건너뜀 + 로그로 안전. 그래도 부족하면 유료($5/월) 또는 Cloudflare Queues.
 - **운영 경보(선택)**: `ADMIN_CHAT_ID` 시크릿을 설정하면 cron이 이상(전송 0건·발송 실패·예산 초과·예보 조회 실패)일 때 그 chatId로 경보가 옵니다. 미설정 시 조용히 비활성.
 - **실시간 비 알람**: 옵트인(`/rainalert`) 유저만 매시간 점검하고 침묵 시간(23~06 KST)엔 즉시 종료하므로 호출량이 작습니다. 룩어헤드(`WITHIN_HOURS`)·침묵 시간(`QUIET_START`/`QUIET_END`)·강도 임계값은 `worker/src/rainalert.ts` 상단 상수로 조정합니다.
-- **발송 시간 변경**: `worker/wrangler.toml`의 `crons`는 **UTC** 기준 (KST−9시간). KST 6:30 → `30 21 * * *`. 비 알람 cron(`0 * * * *`)은 매시간 동작하되 코드에서 KST 06~22시만 발송합니다.
+- **발송 시각**: 유저가 `/region`에서 받는 시각(05~10시)을 직접 고릅니다. cron은 `0 * * * *`(매시간) 하나뿐이고, 코드가 "지금 KST 시각 == 유저 briefHour"인 사람에게 브리핑합니다. 선택 시각 폭·정원은 `worker/src/register.ts`의 `BRIEF_HOURS`/`BRIEF_SLOT_CAP` 상수로 조정합니다.
 - **지역 데이터 갱신**: `python tools/build_regions.py`로 `regions.json` 재생성 후 `worker/regions.json`에 복사.
 
 ## License
