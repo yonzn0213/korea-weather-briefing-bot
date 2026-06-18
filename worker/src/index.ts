@@ -1,10 +1,8 @@
 import type { Env, TgUpdate } from "./types";
 import { handleMessage, handleCallback } from "./register";
-import { runBriefing } from "./briefing";
+import { runBriefing, toKst } from "./briefing";
 import { runRainAlerts } from "./rainalert";
 import { sendMessage } from "./telegram";
-
-const MORNING_CRON = "0 22 * * *"; // KST 07:00 일일 브리핑 (그 외 cron은 실시간 비 알람)
 
 // dead-man switch: cron 이상 징후를 운영자(ADMIN_CHAT_ID)에게 1건 경보.
 // 키 만료·기상청 장애·발송 실패를 사용자 항의가 아니라 즉시 알기 위함.
@@ -38,22 +36,22 @@ export default {
     return new Response("ok"); // 텔레그램 재시도 폭주 방지 — 항상 200
   },
 
+  // 매시간 cron 하나가: (1) 그 시각(KST)을 브리핑 시각으로 고른 유저에게 아침 브리핑,
+  // (2) 옵트인 유저에게 실시간 비 알람을 처리한다. 시각별 분산으로 cron 추가 없이 수용 인원을 늘린다.
   async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
     const now = new Date(event.scheduledTime);
-    if (event.cron === MORNING_CRON) {
-      const res = await runBriefing(env, now);
-      console.log(`브리핑 완료: 전송 ${res.sent} / 실패 ${res.failed} / 건너뜀 ${res.skipped} / 대상 ${res.total}`);
-      const problems: string[] = [];
-      if (res.total > 0 && res.sent === 0) problems.push(`전송 0건(대상 ${res.total}명)`);
-      if (res.failed > 0) problems.push(`발송 실패 ${res.failed}건`);
-      if (res.skipped > 0) problems.push(`예산 초과로 ${res.skipped}건 누락`);
-      await notifyDegraded(env, "아침 브리핑", problems);
-    } else {
-      const res = await runRainAlerts(env, now);
-      console.log(`비 알람 완료: 전송 ${res.sent} / 점검 ${res.checked} / 건너뜀 ${res.skipped} / 실패 ${res.failed}`);
-      const problems: string[] = [];
-      if (res.failed > 0) problems.push(`조회/발송 실패 ${res.failed}건`); // 비 0건은 정상이라 실패만 경보
-      await notifyDegraded(env, "비 알람", problems);
-    }
+    const hour = toKst(now).getUTCHours();
+
+    const b = await runBriefing(env, now, hour);
+    console.log(`${hour}시 브리핑: 전송 ${b.sent} / 실패 ${b.failed} / 건너뜀 ${b.skipped} / 대상 ${b.total}`);
+    const bProblems: string[] = [];
+    if (b.total > 0 && b.sent === 0) bProblems.push(`전송 0건(대상 ${b.total}건)`);
+    if (b.failed > 0) bProblems.push(`발송 실패 ${b.failed}건`);
+    if (b.skipped > 0) bProblems.push(`예산 초과로 ${b.skipped}건 누락`);
+    await notifyDegraded(env, `${hour}시 브리핑`, bProblems);
+
+    const r = await runRainAlerts(env, now);
+    console.log(`비 알람: 전송 ${r.sent} / 점검 ${r.checked} / 건너뜀 ${r.skipped} / 실패 ${r.failed}`);
+    if (r.failed > 0) await notifyDegraded(env, "비 알람", [`조회/발송 실패 ${r.failed}건`]); // 비 0건은 정상
   },
 };

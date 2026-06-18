@@ -1,8 +1,13 @@
-import type { Env, TgMessage, TgCallback, User, InlineKeyboard } from "./types";
-import { MAX_REGIONS } from "./types";
+import type { Env, TgMessage, TgCallback, User, InlineKeyboard, InlineButton } from "./types";
+import { MAX_REGIONS, DEFAULT_BRIEF_HOUR } from "./types";
 import { sidoKeyboard, sigunguKeyboard, resolveRegion } from "./regions";
-import { getUser, putUser, deleteUser } from "./store";
+import { getUser, putUser, deleteUser, listUsers } from "./store";
 import { sendMessage, answerCallback, editMessageText } from "./telegram";
+
+// 아침 브리핑 선택 가능 시각(KST)과 시각당 정원(메시지 수 기준).
+// 시각을 분산하면 매 cron 실행이 subrequest 50 한도 안에 들어와 무료로 수용 인원이 늘어난다.
+export const BRIEF_HOURS = [5, 6, 7, 8, 9, 10];
+export const BRIEF_SLOT_CAP = 35; // 비 알람과 예산을 나눠 쓰므로 50보다 보수적으로
 
 const WELCOME =
   "👋 안녕하세요! <b>전국 아침 브리핑 봇</b>이에요.\n" +
@@ -13,11 +18,44 @@ function regionsLabel(user: User): string {
   return user.regions.map((r) => `${r.sido} ${r.sigungu}`).join(" · ");
 }
 
+function briefHourOf(user: User): number {
+  return user.briefHour ?? DEFAULT_BRIEF_HOUR;
+}
+
+// 시각별 현재 인원(메시지 수 = 지역 수 합). 메뉴 열 때 1회 스캔해 근사 표시·정원 판단에 쓴다.
+// KV에 정확한 카운터를 두지 않는 "느슨한" 방식 — 초과분은 발송 시 subrequest 가드가 흡수.
+export async function countByHour(env: Env): Promise<Record<number, number>> {
+  const counts: Record<number, number> = {};
+  for (const { user } of await listUsers(env)) {
+    const h = briefHourOf(user);
+    counts[h] = (counts[h] ?? 0) + user.regions.length;
+  }
+  return counts;
+}
+
+function chunk(buttons: InlineButton[], cols = 3): InlineButton[][] {
+  const out: InlineButton[][] = [];
+  for (let i = 0; i < buttons.length; i += cols) out.push(buttons.slice(i, i + cols));
+  return out;
+}
+
+function timeKeyboard(counts: Record<number, number>): InlineKeyboard {
+  const buttons = BRIEF_HOURS.map((h) => {
+    const c = counts[h] ?? 0;
+    const full = c >= BRIEF_SLOT_CAP;
+    return { text: full ? `${h}시 · 만석` : `${h}시 · ${c}`, callback_data: `bh:${h}` };
+  });
+  const kb = chunk(buttons);
+  kb.push([{ text: "⬅ 뒤로", callback_data: "m" }]);
+  return { inline_keyboard: kb };
+}
+
 // 설정 메뉴: 등록 지역 목록 + 지역 추가/변경/삭제 + 비 알람 토글
 function settingsMenu(user: User): { text: string; keyboard: InlineKeyboard } {
   const lines = ["⚙️ <b>설정</b>", ""];
   user.regions.forEach((r, i) => lines.push(`${i + 1}. ${r.sido} ${r.sigungu}`));
   lines.push("");
+  lines.push(`⏰ 받는 시각: <b>${briefHourOf(user)}시</b>`);
   lines.push(`🔔 실시간 비 알람: <b>${user.rainAlert ? "켜짐" : "꺼짐"}</b>`);
   lines.push("");
   lines.push("바꿀 항목을 선택해주세요 👇");
@@ -31,6 +69,7 @@ function settingsMenu(user: User): { text: string; keyboard: InlineKeyboard } {
   if (user.regions.length < MAX_REGIONS) {
     rows.push([{ text: "➕ 지역 추가", callback_data: `pick:${user.regions.length}` }]);
   }
+  rows.push([{ text: "⏰ 받는 시각 변경", callback_data: "bh" }]);
   rows.push([{ text: `🔔 비 알람 ${user.rainAlert ? "끄기" : "켜기"}`, callback_data: "ra" }]);
   return { text: lines.join("\n"), keyboard: { inline_keyboard: rows } };
 }
@@ -112,6 +151,43 @@ export async function handleCallback(env: Env, cq: TgCallback): Promise<void> {
     return;
   }
 
+  // 받는 시각 변경: 시각 선택 키보드(현재 인원 표시)
+  if (data === "bh") {
+    const user = await getUser(env, chatId);
+    if (!user) { await answerCallback(token, cq.id, "먼저 /start 를 보내주세요."); return; }
+    const counts = await countByHour(env);
+    await answerCallback(token, cq.id);
+    await editMessageText(token, chatId, messageId,
+      `⏰ 브리핑 받을 시각을 골라주세요\n(숫자 = 현재 인원, 시각당 정원 ${BRIEF_SLOT_CAP})`,
+      { reply_markup: timeKeyboard(counts) });
+    return;
+  }
+
+  // 시각 확정. 형식: bh:{hour}. 정원 초과면 거부(락 없는 느슨한 체크).
+  if (data.startsWith("bh:")) {
+    const hour = Number(data.slice(3));
+    const user = await getUser(env, chatId);
+    if (!user) { await answerCallback(token, cq.id, "먼저 /start 를 보내주세요."); return; }
+    if (!BRIEF_HOURS.includes(hour)) { await answerCallback(token, cq.id, "고를 수 없는 시각이에요."); return; }
+
+    const counts = await countByHour(env);
+    const already = briefHourOf(user) === hour;
+    if (!already && (counts[hour] ?? 0) + user.regions.length > BRIEF_SLOT_CAP) {
+      await answerCallback(token, cq.id, `${hour}시는 정원이 찼어요. 다른 시각을 골라주세요.`);
+      await editMessageText(token, chatId, messageId,
+        `⏰ 다른 시각을 골라주세요 (시각당 정원 ${BRIEF_SLOT_CAP})`,
+        { reply_markup: timeKeyboard(counts) });
+      return;
+    }
+
+    const updated = { ...user, briefHour: hour };
+    await putUser(env, chatId, updated);
+    await answerCallback(token, cq.id, `${hour}시로 설정 완료!`);
+    const menu = settingsMenu(updated);
+    await editMessageText(token, chatId, messageId, menu.text, { reply_markup: menu.keyboard });
+    return;
+  }
+
   // 지역 추가/변경: 해당 slot의 시/도 선택으로 진입
   if (data.startsWith("pick:")) {
     const slot = Number(data.slice(5));
@@ -184,6 +260,7 @@ export async function handleCallback(env: Env, cq: TgCallback): Promise<void> {
       regions,
       name: existing?.name || cq.from?.first_name || "",
       rainAlert: existing?.rainAlert ?? false,
+      briefHour: existing?.briefHour ?? DEFAULT_BRIEF_HOUR,
       ...(existing?.rainSeen ? { rainSeen: existing.rainSeen } : {}),
     };
     await putUser(env, chatId, updated);

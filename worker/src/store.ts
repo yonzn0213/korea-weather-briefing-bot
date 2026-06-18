@@ -1,13 +1,14 @@
 import type { Env, User } from "./types";
+import { DEFAULT_BRIEF_HOUR } from "./types";
 
 // 레거시 단일 지역 스키마({sido,sigungu,name})를 regions[] 스키마로 변환.
 // 기존 KV에 저장된 유저를 일괄 마이그레이션 없이 그대로 읽기 위함.
 export function normalizeUser(raw: any): User {
   if (raw && Array.isArray(raw.regions)) {
-    return { rainAlert: false, ...raw } as User;
+    return { rainAlert: false, briefHour: DEFAULT_BRIEF_HOUR, ...raw } as User;
   }
   const regions = raw?.sido ? [{ sido: raw.sido, sigungu: raw.sigungu }] : [];
-  return { regions, name: raw?.name ?? "", rainAlert: raw?.rainAlert ?? false };
+  return { regions, name: raw?.name ?? "", rainAlert: raw?.rainAlert ?? false, briefHour: DEFAULT_BRIEF_HOUR };
 }
 
 export async function getUser(env: Env, chatId: string): Promise<User | null> {

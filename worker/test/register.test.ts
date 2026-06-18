@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { handleMessage, handleCallback } from "../src/register";
+import { handleMessage, handleCallback, BRIEF_SLOT_CAP } from "../src/register";
 import { getUser } from "../src/store";
 import type { Env, User } from "../src/types";
 
@@ -146,5 +146,36 @@ describe("handleCallback", () => {
     await handleCallback(env(), { id: "c8", data: "r:0:999:0", message: { chat: { id: 100 }, message_id: 7 } });
     const ans = bodies(fn).find((x) => x.url.includes("answerCallbackQuery"));
     expect(ans.body.text).toContain("알 수 없는");
+  });
+
+  it("bh -> 시각 선택 키보드(bh:{hour}) 표시", async () => {
+    const e = env();
+    await e.USERS.put("100", JSON.stringify({ regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수", rainAlert: false, briefHour: 7 } as User));
+    const fn = captureFetch();
+    await handleCallback(e, { id: "t1", data: "bh", message: { chat: { id: 100 }, message_id: 7 } });
+    const edit = bodies(fn).find((x) => x.url.includes("editMessageText"));
+    expect(edit.body.reply_markup.inline_keyboard.flat().some((b: any) => b.callback_data.startsWith("bh:"))).toBe(true);
+  });
+
+  it("bh:6 -> briefHour 저장", async () => {
+    const e = env();
+    await e.USERS.put("100", JSON.stringify({ regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수", rainAlert: false, briefHour: 7 } as User));
+    const fn = captureFetch();
+    await handleCallback(e, { id: "t2", data: "bh:6", message: { chat: { id: 100 }, message_id: 7 } });
+    expect((await getUser(e, "100"))!.briefHour).toBe(6);
+  });
+
+  it("정원 찬 시각은 거부하고 기존 시각 유지", async () => {
+    const e = env();
+    // 8시 슬롯을 정원(BRIEF_SLOT_CAP)까지 채움
+    for (let i = 0; i < BRIEF_SLOT_CAP; i++) {
+      await e.USERS.put(`u${i}`, JSON.stringify({ regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "x", rainAlert: false, briefHour: 8 } as User));
+    }
+    await e.USERS.put("100", JSON.stringify({ regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수", rainAlert: false, briefHour: 7 } as User));
+    const fn = captureFetch();
+    await handleCallback(e, { id: "t3", data: "bh:8", message: { chat: { id: 100 }, message_id: 7 } });
+    expect((await getUser(e, "100"))!.briefHour).toBe(7); // 변경 안 됨
+    const ans = bodies(fn).find((x) => x.url.includes("answerCallbackQuery"));
+    expect(ans.body.text).toContain("정원");
   });
 });

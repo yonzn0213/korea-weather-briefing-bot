@@ -1,4 +1,5 @@
 import type { Env } from "./types";
+import { DEFAULT_BRIEF_HOUR } from "./types";
 import { REGIONS } from "./regions";
 import { listUsers } from "./store";
 import { sendMessage } from "./telegram";
@@ -288,8 +289,11 @@ export function rotateByDate<T>(items: T[], now: Date): T[] {
   return items.slice(offset).concat(items.slice(0, offset));
 }
 
-export async function runBriefing(env: Env, now: Date): Promise<{ sent: number; failed: number; skipped: number; total: number }> {
-  const ordered = rotateByDate(await listUsers(env), now);
+// hour를 주면 briefHour가 그 시각인 유저에게만 발송(시각별 분산). 생략 시 전체.
+export async function runBriefing(env: Env, now: Date, hour?: number): Promise<{ sent: number; failed: number; skipped: number; total: number }> {
+  const all = await listUsers(env);
+  const targeted = hour === undefined ? all : all.filter(({ user }) => (user.briefHour ?? DEFAULT_BRIEF_HOUR) === hour);
+  const ordered = rotateByDate(targeted, now);
   const weatherCache = new Map<string, Weather | null>();
   const dustCache = new Map<string, Dust | null>();
   let subreq = 0;

@@ -18,7 +18,7 @@ function env(): Env {
   return { USERS: fakeKV(), TELEGRAM_BOT_TOKEN: "t", DATA_GO_KR_KEY: "k", WEBHOOK_SECRET: "s" };
 }
 
-const U: User = { regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수", rainAlert: false };
+const U: User = { regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수", rainAlert: false, briefHour: 7 };
 
 describe("store", () => {
   it("put -> get 라운드트립", async () => {
@@ -53,12 +53,12 @@ describe("store", () => {
     // 예전 버전이 저장한 형태
     await e.USERS.put("9", JSON.stringify({ sido: "부산광역시", sigungu: "해운대구", name: "영희" }));
     const u = await getUser(e, "9");
-    expect(u).toEqual({ regions: [{ sido: "부산광역시", sigungu: "해운대구" }], name: "영희", rainAlert: false });
+    expect(u).toEqual({ regions: [{ sido: "부산광역시", sigungu: "해운대구" }], name: "영희", rainAlert: false, briefHour: 7 });
   });
 
   it("두 지역 유저도 그대로 읽는다", async () => {
     const e = env();
-    const two: User = { regions: [{ sido: "서울특별시", sigungu: "강남구" }, { sido: "부산광역시", sigungu: "해운대구" }], name: "철수", rainAlert: true };
+    const two: User = { regions: [{ sido: "서울특별시", sigungu: "강남구" }, { sido: "부산광역시", sigungu: "해운대구" }], name: "철수", rainAlert: true, briefHour: 6 };
     await putUser(e, "5", two);
     expect(await getUser(e, "5")).toEqual(two);
   });

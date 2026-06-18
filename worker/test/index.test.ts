@@ -71,27 +71,31 @@ describe("scheduled cron 분기", () => {
   }
   const calledWith = (fn: any, needle: string) => fn.mock.calls.some((c: any[]) => String(c[0]).includes(needle));
 
-  it("아침 cron은 일일 브리핑(getVilageFcst) 실행", async () => {
+  // KST 7시 = UTC 22:00, KST 10시 = UTC 01:00
+  const KST7 = Date.parse("2026-06-12T22:00:00Z");
+  const KST10 = Date.parse("2026-06-18T01:00:00Z");
+
+  it("그 시각(briefHour) 유저에게 브리핑 발송(getVilageFcst)", async () => {
     const e = env();
-    await e.USERS.put("1", JSON.stringify({ regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수", rainAlert: true }));
+    await e.USERS.put("1", JSON.stringify({ regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수", rainAlert: false, briefHour: 7 }));
     const fn = stubApis();
-    await worker.scheduled({ cron: "0 22 * * *", scheduledTime: Date.parse("2026-06-12T22:00:00Z") } as any, e, ctx);
-    expect(calledWith(fn, "getVilageFcst")).toBe(true);
-    expect(calledWith(fn, "getUltraSrtFcst")).toBe(false);
+    await worker.scheduled({ cron: "0 * * * *", scheduledTime: KST7 } as any, e, ctx);
+    expect(calledWith(fn, "getVilageFcst")).toBe(true);   // 7시 유저 브리핑
+    expect(calledWith(fn, "getUltraSrtFcst")).toBe(false); // 비 알람 옵트인 아님
   });
 
-  it("매시간 cron은 실시간 비 알람(getUltraSrtFcst) 실행", async () => {
+  it("브리핑 시각이 아니면 비 알람만(브리핑 스킵)", async () => {
     const e = env();
-    await e.USERS.put("1", JSON.stringify({ regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수", rainAlert: true }));
+    await e.USERS.put("1", JSON.stringify({ regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수", rainAlert: true, briefHour: 7 }));
     const fn = stubApis();
-    await worker.scheduled({ cron: "0 * * * *", scheduledTime: Date.parse("2026-06-18T01:00:00Z") } as any, e, ctx);
-    expect(calledWith(fn, "getUltraSrtFcst")).toBe(true);
-    expect(calledWith(fn, "getVilageFcst")).toBe(false);
+    await worker.scheduled({ cron: "0 * * * *", scheduledTime: KST10 } as any, e, ctx); // KST10 ≠ briefHour 7
+    expect(calledWith(fn, "getVilageFcst")).toBe(false);  // 10시엔 7시 유저 대상 아님
+    expect(calledWith(fn, "getUltraSrtFcst")).toBe(true);  // 비 알람은 동작
   });
 
   it("발송 실패 시 ADMIN_CHAT_ID로 운영 경보(dead-man switch)", async () => {
     const e: Env = { ...env(), ADMIN_CHAT_ID: "999" };
-    await e.USERS.put("1", JSON.stringify({ regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수" }));
+    await e.USERS.put("1", JSON.stringify({ regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수", briefHour: 7 }));
     // 텔레그램 발송이 실패(ok:false)하도록 → 브리핑 sent 0 / failed 발생
     const fn = vi.fn(async (url: string) => {
       const u = String(url);
@@ -100,7 +104,7 @@ describe("scheduled cron 분기", () => {
       return new Response(JSON.stringify({ ok: false }));
     });
     vi.stubGlobal("fetch", fn);
-    await worker.scheduled({ cron: "0 22 * * *", scheduledTime: Date.parse("2026-06-12T22:00:00Z") } as any, e, ctx);
+    await worker.scheduled({ cron: "0 * * * *", scheduledTime: KST7 } as any, e, ctx);
     const adminCall = fn.mock.calls
       .map((c: any[]) => { try { return JSON.parse(c[1].body); } catch { return {}; } })
       .find((b: any) => b.chat_id === "999" && typeof b.text === "string" && b.text.includes("⚠️"));
@@ -109,10 +113,10 @@ describe("scheduled cron 분기", () => {
 
   it("ADMIN_CHAT_ID 없으면 경보 안 보냄", async () => {
     const e = env(); // ADMIN_CHAT_ID 미설정
-    await e.USERS.put("1", JSON.stringify({ regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수" }));
+    await e.USERS.put("1", JSON.stringify({ regions: [{ sido: "서울특별시", sigungu: "강남구" }], name: "철수", briefHour: 7 }));
     const fn = vi.fn(async () => new Response(JSON.stringify({ ok: false })));
     vi.stubGlobal("fetch", fn);
-    await worker.scheduled({ cron: "0 22 * * *", scheduledTime: Date.parse("2026-06-12T22:00:00Z") } as any, e, ctx);
+    await worker.scheduled({ cron: "0 * * * *", scheduledTime: KST7 } as any, e, ctx);
     const adminCall = fn.mock.calls
       .map((c: any[]) => { try { return JSON.parse(c[1].body); } catch { return {}; } })
       .find((b: any) => b.chat_id === "999");

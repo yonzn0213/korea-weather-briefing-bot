@@ -15,9 +15,12 @@ export interface User {
   regions: Region[];       // 1~2개 등록 지역
   name: string;
   rainAlert?: boolean;     // 실시간 비 알람 옵트인 여부
+  briefHour?: number;      // 아침 브리핑 받을 KST 시각(기본 7)
   // gridKey("nx,ny") → 마지막 비 알람을 보낸 시각 "YYYYMMDDHH". 같은 비 도배 방지용.
   rainSeen?: Record<string, string>;
 }
+
+export const DEFAULT_BRIEF_HOUR = 7;
 
 export const MAX_REGIONS = 2;
 
