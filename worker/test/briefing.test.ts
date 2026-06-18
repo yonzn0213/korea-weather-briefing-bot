@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { dustFor, buildMessage, gradePm10, rotateByDate, parseWeatherItems, resolveLowHigh, formatHourly, hourEmoji, clothingFor, clothingRange, pickLuckyColor, LUCKY_COLORS } from "../src/briefing";
+import { dustFor, buildMessage, gradePm10, rotateByDate, parseWeatherItems, resolveLowHigh, resolveFeelsLowHigh, feelsLike, formatHourly, hourEmoji, clothingFor, clothingRange, pickLuckyColor, LUCKY_COLORS } from "../src/briefing";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -70,11 +70,43 @@ describe("buildMessage", () => {
     expect(msg).toContain("👕 옷차림:");
     expect(msg).toContain("🎨 오늘의 행운 색: " + LUCKY_COLORS[0]);
   });
+  it("바람·습도 있으면 체감온도 함께 표시", () => {
+    const wc = { ...W, hourlyWind: { "0600": 6, "1500": 1 }, hourlyHumid: { "0600": 50, "1500": 75 } };
+    const msg = buildMessage(now, "경기도", "수원시", wc as any, { pm10: 45, pm25: 22 }, false, () => 0);
+    expect(msg).toContain("체감");
+  });
   it("TMN/TMX 없으면 hourly로 최저/최고 fallback", () => {
     const wf = { popMax: 0, rainHours: [] as [string, string][], tmn: null, tmx: null, sky: null, hourly: { "0600": 19, "1500": 32 }, hourlySky: {}, hourlyPty: {} };
     const msg = buildMessage(now, "경기도", "수원시", wf, { pm10: 45, pm25: 22 }, false, () => 0);
     expect(msg).toContain("최저 19°C");
     expect(msg).toContain("최고 32°C");
+  });
+});
+
+describe("feelsLike", () => {
+  it("덥고 습하면 기온보다 높게(체감 더움)", () => {
+    expect(feelsLike(33, 1, 70)).toBeGreaterThan(33);
+  });
+  it("춥고 바람 불면 기온보다 낮게(체감 추움)", () => {
+    expect(feelsLike(0, 6, 50)).toBeLessThan(0);
+  });
+  it("바람/습도 정보 없으면 기온 그대로", () => {
+    expect(feelsLike(20, null, 50)).toBe(20);
+    expect(feelsLike(20, 3, null)).toBe(20);
+  });
+});
+
+describe("resolveFeelsLowHigh", () => {
+  const base = { popMax: 0, rainHours: [] as [string, string][], tmn: null, tmx: null, sky: null, hourlySky: {}, hourlyPty: {} };
+  it("기온+바람+습도가 다 있는 슬롯들로 체감 min/max", () => {
+    const w = { ...base, hourly: { "0600": 0, "1500": 33 }, hourlyWind: { "0600": 6, "1500": 1 }, hourlyHumid: { "0600": 50, "1500": 70 } };
+    const [lo, hi] = resolveFeelsLowHigh(w as any);
+    expect(lo!).toBeLessThan(0);   // 새벽 추위+바람
+    expect(hi!).toBeGreaterThan(33); // 한낮 더위+습도
+  });
+  it("바람/습도 없으면 [null, null]", () => {
+    const w = { ...base, hourly: { "0600": 19 }, hourlyWind: {}, hourlyHumid: {} };
+    expect(resolveFeelsLowHigh(w as any)).toEqual([null, null]);
   });
 });
 

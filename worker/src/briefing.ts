@@ -34,8 +34,10 @@ export interface Weather {
   tmx: number | null;
   sky: string | null;
   hourly: Record<string, number>;
-  hourlySky: Record<string, string>; // 시간(HHMM) → SKY 코드
-  hourlyPty: Record<string, string>; // 시간(HHMM) → PTY 코드
+  hourlySky: Record<string, string>;   // 시간(HHMM) → SKY 코드
+  hourlyPty: Record<string, string>;   // 시간(HHMM) → PTY 코드
+  hourlyWind: Record<string, number>;  // 시간(HHMM) → 풍속(m/s, WSD)
+  hourlyHumid: Record<string, number>; // 시간(HHMM) → 습도(%, REH)
 }
 export interface DustVal { pm10: number | null; pm25: number | null; }
 export interface Dust { stations: Record<string, DustVal>; avg: DustVal; }
@@ -60,7 +62,7 @@ function baseDateTime(kst: Date): [string, string] {
 }
 
 export function parseWeatherItems(items: any[], today: string): Weather {
-  const data: Weather = { popMax: 0, rainHours: [], tmn: null, tmx: null, sky: null, hourly: {}, hourlySky: {}, hourlyPty: {} };
+  const data: Weather = { popMax: 0, rainHours: [], tmn: null, tmx: null, sky: null, hourly: {}, hourlySky: {}, hourlyPty: {}, hourlyWind: {}, hourlyHumid: {} };
   for (const it of items) {
     if (it.fcstDate !== today) continue;
     const { category: cat, fcstValue: val, fcstTime: t } = it;
@@ -70,6 +72,8 @@ export function parseWeatherItems(items: any[], today: string): Weather {
     else if (cat === "TMX") data.tmx = parseFloat(val);
     else if (cat === "TMP") { const v = parseFloat(val); if (!Number.isNaN(v)) data.hourly[t] = v; }
     else if (cat === "SKY") { data.hourlySky[t] = val; if (t === "1200") data.sky = SKY_LABEL[val] || ""; }
+    else if (cat === "WSD") { const v = parseFloat(val); if (!Number.isNaN(v)) data.hourlyWind[t] = v; }
+    else if (cat === "REH") { const v = parseFloat(val); if (!Number.isNaN(v)) data.hourlyHumid[t] = v; }
   }
   return data;
 }
@@ -138,6 +142,28 @@ export function resolveLowHigh(w: Weather): [number | null, number | null] {
   const low = w.tmn ?? (temps.length ? Math.min(...temps) : null);
   const high = w.tmx ?? (temps.length ? Math.max(...temps) : null);
   return [low, high];
+}
+
+// 체감온도(호주 기상청 Apparent Temperature). 기온·습도·바람을 한 식으로 반영해
+// 여름 습한 더위는 높게, 겨울 바람은 낮게 나온다. 습도/바람이 없으면 기온 그대로.
+export function feelsLike(temp: number, windMs: number | null, humid: number | null): number {
+  if (windMs === null || humid === null) return temp;
+  const e = (humid / 100) * 6.105 * Math.exp((17.27 * temp) / (237.7 + temp)); // 수증기압(hPa)
+  return temp + 0.33 * e - 0.70 * windMs - 4.0;
+}
+
+// 시간별 기온+바람+습도가 모두 있는 슬롯의 체감온도 min/max. 데이터 없으면 [null, null].
+export function resolveFeelsLowHigh(w: Weather): [number | null, number | null] {
+  const winds = w.hourlyWind ?? {};
+  const humids = w.hourlyHumid ?? {};
+  const feels: number[] = [];
+  for (const [t, temp] of Object.entries(w.hourly)) {
+    if (winds[t] !== undefined && humids[t] !== undefined) {
+      feels.push(feelsLike(temp, winds[t], humids[t]));
+    }
+  }
+  if (feels.length === 0) return [null, null];
+  return [Math.min(...feels), Math.max(...feels)];
 }
 
 // 시간대별 날씨를 행으로 나눠 표시. 각 행: "HH시  기온°  이모지 라벨"
@@ -215,7 +241,17 @@ export function buildMessage(
     const temp: string[] = [];
     if (low !== null) temp.push(`최저 ${Math.round(low)}°C`);
     if (high !== null) temp.push(`최고 ${Math.round(high)}°C`);
-    if (temp.length) lines.push("🌡 " + temp.join(" / "));
+    if (temp.length) {
+      let tline = "🌡 " + temp.join(" / ");
+      // 체감온도가 실제 기온과 의미 있게 다를 때만 덧붙인다(같으면 군더더기).
+      const [fLow, fHigh] = resolveFeelsLowHigh(w);
+      if (fLow !== null && fHigh !== null) {
+        const fl = Math.round(fLow), fh = Math.round(fHigh);
+        const differs = low === null || high === null || fl !== Math.round(low) || fh !== Math.round(high);
+        if (differs) tline += fl === fh ? ` (체감 ${fl}°C)` : ` (체감 ${fl}~${fh}°C)`;
+      }
+      lines.push(tline);
+    }
     const hourly = formatHourly(w);
     if (hourly) lines.push(hourly);
     const clothing = clothingRange(low, high);
@@ -252,7 +288,7 @@ export function rotateByDate<T>(items: T[], now: Date): T[] {
   return items.slice(offset).concat(items.slice(0, offset));
 }
 
-export async function runBriefing(env: Env, now: Date): Promise<{ sent: number; failed: number; skipped: number }> {
+export async function runBriefing(env: Env, now: Date): Promise<{ sent: number; failed: number; skipped: number; total: number }> {
   const ordered = rotateByDate(await listUsers(env), now);
   const weatherCache = new Map<string, Weather | null>();
   const dustCache = new Map<string, Dust | null>();
@@ -296,5 +332,5 @@ export async function runBriefing(env: Env, now: Date): Promise<{ sent: number; 
     catch (e) { console.error(`[send ${chatId}]`, e instanceof Error ? e.message : e); subreq++; failed++; }
   }
 
-  return { sent, failed, skipped };
+  return { sent, failed, skipped, total: jobs.length };
 }
