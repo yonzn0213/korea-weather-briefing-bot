@@ -1,6 +1,6 @@
 # 🌅 전국 아침 브리핑 봇
 
-매일 아침 7시, 내가 사는 **전국 시/군/구**의 ☔ 비 소식·🌡 기온(최저/최고·시간대별 날씨 이모지)·👕 옷차림·😷 미세먼지·🎨 행운의 색을 텔레그램으로 알려주는 봇입니다.
+매일 아침 7시, 내가 사는 **전국 시/군/구**의 ☔ 비 소식·🌡 기온(최저/최고·체감온도·시간대별 날씨 이모지)·👕 옷차림·😷 미세먼지·🎨 행운의 색을 텔레그램으로 알려주는 봇입니다.
 **최대 2개 지역**을 등록할 수 있고, 켜두면 **곧 비가 올 때 실시간으로 미리 알려주는** 옵트인 알람도 있습니다.
 **Cloudflare Workers**(webhook + Cron Trigger) + **KV**로 동작하는 **서버리스** 봇으로, 등록에 즉시 응답하고 서버·DB 비용 없이 운영됩니다.
 
@@ -10,7 +10,7 @@
 🌅 6월 15일 강남구 아침 브리핑
 
 ☔ 오늘 비 소식 있어요! (14시~18시, 강수확률 최대 80%) 우산 꼭 챙기세요!
-🌡 최저 19°C / 최고 32°C
+🌡 최저 19°C / 최고 32°C (체감 18~35°C)
 ⏰ 시간대별
 06시  19°  ☀️ 맑음
 09시  23°  ⛅ 구름많음
@@ -65,7 +65,7 @@
 | 스케줄 | Workers Cron Triggers |
 | 메시징 | Telegram Bot API (Webhook) |
 | 외부 데이터 | 기상청 단기예보·초단기예보 API · 에어코리아 대기오염 API (공공데이터포털) |
-| 테스트 | Vitest (98 tests, TDD) |
+| 테스트 | Vitest (106 tests, TDD) |
 | 데이터 생성 | Python (기상청 LCC 좌표 변환 스크립트) |
 
 ---
@@ -139,7 +139,10 @@ Cloudflare Workers 무료 플랜은 **요청당 subrequest 50개** 제한이 있
 - **에피소드 단위 중복 방지**: 고정 쿨다운 대신, gridKey별 마지막 비의 **종료 시각**(`rainSeen`)을 KV에 기록 → 같은 비가 이어지는 동안은 침묵하고, **마른 시간 뒤 다시 오는 새 비는 재알림**.
 - **행동 중심 문구**: 사용자 전원이 강수확률 %를 "안 본다"고 해서 제거하고, **시작~종료 시각 + 강도(약/강, `RN1` 기반) + 행동 한 줄**로 구성. 예: `☔ 강남구 13시~15시 강한 비 예상`.
 
-### 9. 데이터 모델 진화: 단일 지역 → 지역 배열(무중단 마이그레이션)
+### 9. 운영 관측가능성: cron 자가감시(dead-man switch)
+서버리스 cron은 조용히 실패하기 쉽다(키 만료·기상청 장애 시 `console.log`만 남고 운영자는 사용자 항의로 뒤늦게 인지). 그래서 `runBriefing`/`runRainAlerts`가 `total`·`failed`를 반환하고, 아침 브리핑이 **대상이 있는데 전송 0건**이거나 **발송 실패/예산 초과**가 생기면 `ADMIN_CHAT_ID`로 텔레그램 경보 1건을 보낸다(무료 한도 내, 미설정 시 비활성). 비 알람은 "비 0건"이 정상이라 **조회/발송 실패**만 경보한다.
+
+### 10. 데이터 모델 진화: 단일 지역 → 지역 배열(무중단 마이그레이션)
 지역 2개 지원을 위해 `User`를 `{sido, sigungu}`에서 `regions[]`로 바꾸되, **일괄 마이그레이션 없이** 읽기 시점에 레거시 스키마를 자동 변환(`normalizeUser`)해 기존 등록 유저가 끊기지 않도록 했다. 아침 브리핑은 (유저, 지역) 단위로 펼쳐 **지역마다 메시지 1개**를 보낸다.
 
 ---
@@ -157,7 +160,7 @@ Cloudflare Workers 무료 플랜은 **요청당 subrequest 50개** 제한이 있
 
 | 파일 | 역할 |
 |------|------|
-| `worker/src/index.ts` | 진입점 — `fetch`(webhook 검증·라우팅) + `scheduled`(cron 분기: 아침 브리핑 / 비 알람) |
+| `worker/src/index.ts` | 진입점 — `fetch`(webhook 검증·라우팅) + `scheduled`(cron 분기: 아침 브리핑 / 비 알람) + 운영 자가감시 경보 |
 | `worker/src/register.ts` | 시도/시군구 등록·변경·해지(지역 최대 2개) + 설정 메뉴 + 비 알람 토글 |
 | `worker/src/briefing.ts` | 지역별 날씨/미세먼지 브리핑(시간대별 이모지 포함) + subrequest 예산·회전 |
 | `worker/src/rainalert.ts` | 초단기예보 기반 실시간 비 알람(옵트인, 1h 룩어헤드·침묵 시간·에피소드 중복방지) |
@@ -193,6 +196,7 @@ wrangler kv namespace create USERS    # 출력 id를 wrangler.toml의 REPLACE_WI
 wrangler secret put TELEGRAM_BOT_TOKEN
 wrangler secret put DATA_GO_KR_KEY
 wrangler secret put WEBHOOK_SECRET    # 임의 난수 (예: openssl rand -hex 16)
+wrangler secret put ADMIN_CHAT_ID     # (선택) 본인 chatId — cron 이상 시 경보 받을 곳
 wrangler deploy                       # 출력된 https://....workers.dev URL 확보
 ```
 
@@ -213,6 +217,7 @@ curl "https://api.telegram.org/bot<토큰>/setWebhook" \
 - **개인정보**: 유저 목록은 Cloudflare KV에 비공개 저장(저장소 노출 없음).
 - **보안**: 봇 토큰·인증키는 `wrangler secret`에만 저장하고 코드·저장소에 커밋하지 않습니다(`.dev.vars`는 `.gitignore`). webhook은 `secret_token` 헤더로 검증합니다.
 - **무료 한도**: Workers 무료 플랜은 요청당 subrequest 50개라 일일 브리핑은 캐싱 후 약 **40~45명**까지 안전(초과 시 회차 건너뜀 + 로그). 확장은 유료($5/월) 또는 Cloudflare Queues.
+- **운영 경보(선택)**: `ADMIN_CHAT_ID` 시크릿을 설정하면 cron이 이상(전송 0건·발송 실패·예산 초과·예보 조회 실패)일 때 그 chatId로 경보가 옵니다. 미설정 시 조용히 비활성.
 - **실시간 비 알람**: 옵트인(`/rainalert`) 유저만 매시간 점검하고 침묵 시간(23~06 KST)엔 즉시 종료하므로 호출량이 작습니다. 룩어헤드(`WITHIN_HOURS`)·침묵 시간(`QUIET_START`/`QUIET_END`)·강도 임계값은 `worker/src/rainalert.ts` 상단 상수로 조정합니다.
 - **발송 시간 변경**: `worker/wrangler.toml`의 `crons`는 **UTC** 기준 (KST−9시간). KST 6:30 → `30 21 * * *`. 비 알람 cron(`0 * * * *`)은 매시간 동작하되 코드에서 KST 06~22시만 발송합니다.
 - **지역 데이터 갱신**: `python tools/build_regions.py`로 `regions.json` 재생성 후 `worker/regions.json`에 복사.
