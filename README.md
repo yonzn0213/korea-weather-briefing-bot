@@ -1,6 +1,6 @@
 # 🌅 전국 아침 브리핑 봇
 
-매일 아침 7시, 내가 사는 **전국 시/군/구**의 ☔ 비 소식·🌡 기온(최저/최고·체감온도·시간대별 날씨 이모지)·👕 옷차림·😷 미세먼지·🎨 행운의 색을 텔레그램으로 알려주는 봇입니다.
+매일 아침 **원하는 시각**에, 내가 사는 **전국 시/군/구**의 ☔ 비 소식·🌡 기온(최저/최고·체감온도·시간대별 날씨 이모지)·👕 옷차림·😷 미세먼지·🎨 행운의 색을 텔레그램으로 알려주는 봇입니다.
 **최대 2개 지역**을 등록할 수 있고, 켜두면 **곧 비가 올 때 실시간으로 미리 알려주는** 옵트인 알람도 있습니다.
 **Cloudflare Workers**(webhook + Cron Trigger) + **KV**로 동작하는 **서버리스** 봇으로, 등록에 즉시 응답하고 서버·DB 비용 없이 운영됩니다.
 
@@ -73,22 +73,22 @@
 ## 🏗 아키텍처
 
 ```
-                    ┌──────────────────── Cloudflare Worker ────────────────────┐
-  Telegram ──POST──▶│ fetch()                                                    │
-  (webhook)         │  ├─ secret_token 헤더 검증 (가짜 요청 차단)                  │
-                    │  ├─ /start·/region·/rainalert·/stop·콜백 라우팅              │──▶ Telegram API
-                    │  └─ 유저 등록/변경/해지(지역 최대 2개)    ┌────────────┐     │   (즉시 응답)
-                    │                                          │ KV (USERS) │     │
-  Cron(매시간)──────▶│ scheduled() — 매 정시(KST)                │ chatId→유저 │     │
-                    │  ├─ ①briefHour==현재시각 유저 브리핑 ◀────▶└────────────┘     │
-                    │  │   날씨(격자별)·미세먼지(시도별) 캐싱 조회 ──────────────────│──▶ 기상청 / 에어코리아
-                    │  ├─ ②rainAlert 유저 비 알람(06~22, 초단기) ──────────────────│──▶ 기상청(초단기)
-                    │  └─ subrequest 예산 가드 + 이상 시 운영 경보                   │──▶ Telegram API
-                    └────────────────────────────────────────────────────────────┘
+  Telegram  --(webhook)-->  Worker.fetch()        (등록/변경/해지 즉시 처리)
+      - secret_token 헤더 검증 (불일치 시 403)
+      - /start  /region  /rainalert  /stop  콜백 라우팅
+      - 유저 등록 / 변경 / 해지 (지역 최대 2개)   <-->  KV (USERS)
+
+  Cron (hourly) ---------->  Worker.scheduled()   (매 정시 KST 실행)
+      - (1) briefHour == 현재 시각 유저    -->  아침 브리핑
+      - (2) rainAlert 옵트인 유저          -->  실시간 비 알람 (06~22시)
+      - 외부 조회: 날씨 / 미세먼지 / 초단기   -->  기상청 / 에어코리아
+      - subrequest 예산 가드(45) + 날짜 기반 회전
+      - 발송  -->  Telegram API     (이상 시 ADMIN_CHAT_ID 경보)
 ```
 
-- **단일 Worker**가 두 진입점(`fetch` = webhook, `scheduled` = cron)을 담당.
-- 등록은 webhook으로 **즉시** 처리. **매시간 cron 하나**가 그 시각(KST)을 받는 시각으로 고른 유저에게 브리핑하고, 옵트인 유저에게 비 알람을 보낸다 — 시각 분산으로 cron 추가 없이 수용 인원을 늘린다.
+- **단일 Worker, 두 진입점** — `fetch`(webhook)는 등록/변경/해지를 **즉시** 처리, `scheduled`(매시간 cron)는 브리핑과 비 알람을 처리.
+- 매시간 cron **하나**가 "현재 KST 시각 == 유저 `briefHour`"인 사람에게 브리핑하고 옵트인 유저에게 비 알람을 보낸다 — 시각 분산으로 cron 추가 없이 수용 인원을 늘린다.
+- 상태는 모두 **KV(USERS)** 한 곳에, **유저당 키 1개**(`chatId → 유저`)로 저장한다.
 
 ---
 
@@ -151,8 +151,8 @@ Cloudflare Workers 무료 플랜은 **요청당 subrequest 50개** 제한이 있
 
 ## ✅ 테스트 & 품질
 
-- **TDD**로 작성, **Vitest 단위 테스트 37개** (`cd worker && npm test`).
-- 커버리지: 키보드/콜백 라운드트립, KV 저장소(in-memory mock), 텔레그램 API(fetch mock), 미세먼지 fallback, 메시지 빌드, subrequest 예산·유저 회전, webhook secret 검증·메서드 거부.
+- **TDD**로 작성, **Vitest 단위 테스트 109개** (`cd worker && npm test`).
+- 커버리지: 키보드/콜백 라운드트립(지역 slot·받는 시각·비 알람 토글), KV 저장소(in-memory mock)와 레거시 스키마 변환, 텔레그램 API(fetch mock), 미세먼지 fallback, 메시지 빌드(체감온도·시간대별 이모지), 비 알람(초단기 파싱·강수 구간·에피소드 중복방지), 받는 시각 정원(soft cap), subrequest 예산·날짜 회전, cron 라우팅·운영 경보, webhook secret 검증·메서드 거부.
 - **타입 게이트**: `npx tsc --noEmit`(프로덕션 `src` 대상, strict). 테스트는 vitest 실행으로 검증.
 - 모듈은 단일 책임으로 분리(`regions`·`store`·`telegram`·`register`·`briefing`·`rainalert`·`index`)하고 의존성을 주입해 테스트 용이성 확보.
 
@@ -169,7 +169,7 @@ Cloudflare Workers 무료 플랜은 **요청당 subrequest 50개** 제한이 있
 | `worker/src/regions.ts` | `regions.json` 로드 + 인라인 키보드(slot) + 콜백 해석 |
 | `worker/src/store.ts` | Cloudflare KV 유저 저장소 (유저당 키 1개, 레거시 스키마 자동 변환) |
 | `worker/src/telegram.ts` | 텔레그램 Bot API 헬퍼 |
-| `worker/wrangler.toml` | Worker 설정 (KV 바인딩, cron 2개) |
+| `worker/wrangler.toml` | Worker 설정 (KV 바인딩, 매시간 cron 1개) |
 | `regions.json` / `tools/build_regions.py` | 전국 시군구 격자좌표 + 생성·검증 도구 |
 
 ---
