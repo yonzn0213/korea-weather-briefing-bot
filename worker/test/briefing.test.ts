@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { dustFor, buildMessage, gradePm10, rotateByDate, parseWeatherItems, resolveLowHigh, resolveFeelsLowHigh, feelsLike, formatHourly, hourEmoji, clothingFor, clothingRange, pickLuckyColor, LUCKY_COLORS } from "../src/briefing";
+import { dustFor, buildMessage, gradePm10, rotateByDate, parseWeatherItems, resolveLowHigh, resolveFeelsLowHigh, feelsLike, formatHourly, hourEmoji, clothingFor, clothingRange, pickLuckyColor, LUCKY_COLORS, prevAnnounce, fetchKmaItems, withRetry, fetchWeather } from "../src/briefing";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -245,5 +245,94 @@ describe("pickLuckyColor", () => {
     for (const r of [0.1, 0.37, 0.5, 0.83]) {
       expect(LUCKY_COLORS).toContain(pickLuckyColor(() => r));
     }
+  });
+});
+
+describe("prevAnnounce", () => {
+  it("0500 → 같은날 0200", () => expect(prevAnnounce("20260629", "0500")).toEqual(["20260629", "0200"]));
+  it("2300 → 같은날 2000", () => expect(prevAnnounce("20260629", "2300")).toEqual(["20260629", "2000"]));
+  it("0200 → 전날 2300", () => expect(prevAnnounce("20260629", "0200")).toEqual(["20260628", "2300"]));
+  it("월 경계: 0200 → 전달 말일 2300", () => expect(prevAnnounce("20260701", "0200")).toEqual(["20260630", "2300"]));
+});
+
+describe("fetchKmaItems", () => {
+  const stub = (body: string | object, ok = true) =>
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(typeof body === "string" ? body : JSON.stringify(body), { status: ok ? 200 : 500 })));
+
+  it("정상 응답은 item 배열", async () => {
+    stub({ response: { header: { resultCode: "00" }, body: { items: { item: [{ a: 1 }, { a: 2 }] } } } });
+    expect(await fetchKmaItems("u")).toEqual([{ a: 1 }, { a: 2 }]);
+  });
+  it("item이 단일 객체면 배열로 감싼다", async () => {
+    stub({ response: { header: { resultCode: "00" }, body: { items: { item: { a: 1 } } } } });
+    expect(await fetchKmaItems("u")).toEqual([{ a: 1 }]);
+  });
+  it("NODATA(03)는 null(폴백 신호)", async () => {
+    stub({ response: { header: { resultCode: "03", resultMsg: "NODATA" } } });
+    expect(await fetchKmaItems("u")).toBeNull();
+  });
+  it("JSON 아니면 throw(한도초과/장애)", async () => {
+    stub("<OpenAPI_ServiceResponse><cmmMsgHeader>LIMITED</cmmMsgHeader></OpenAPI_ServiceResponse>");
+    await expect(fetchKmaItems("u")).rejects.toThrow();
+  });
+  it("에러코드(22 한도초과)는 throw", async () => {
+    stub({ response: { header: { resultCode: "22", resultMsg: "LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS" } } });
+    await expect(fetchKmaItems("u")).rejects.toThrow("22");
+  });
+  it("HTTP 5xx는 throw", async () => {
+    stub("server error", false);
+    await expect(fetchKmaItems("u")).rejects.toThrow("500");
+  });
+  it("header 없는 응답(테스트 목)도 items 추출", async () => {
+    stub({ response: { body: { items: { item: [{ a: 1 }] } } } });
+    expect(await fetchKmaItems("u")).toEqual([{ a: 1 }]);
+  });
+});
+
+describe("withRetry", () => {
+  it("일시 실패 후 재시도로 성공", async () => {
+    let calls = 0;
+    const v = await withRetry(async () => { if (calls++ === 0) throw new Error("blip"); return "ok"; }, "t");
+    expect(v).toBe("ok");
+    expect(calls).toBe(2);
+  });
+  it("계속 실패하면 마지막 에러를 던짐", async () => {
+    let calls = 0;
+    await expect(withRetry(async () => { calls++; throw new Error("dead"); }, "t")).rejects.toThrow("dead");
+    expect(calls).toBe(2); // 최초 1 + 재시도 1
+  });
+});
+
+describe("fetchWeather", () => {
+  const KST7 = new Date("2026-06-28T22:00:00Z"); // KST 06-29 07:00 → base 0500
+
+  it("0500 NODATA면 직전 발표분(0200)으로 폴백", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (u: string) => {
+      calls.push(String(u));
+      const bt = new URL(String(u)).searchParams.get("base_time");
+      if (bt === "0500") return new Response(JSON.stringify({ response: { header: { resultCode: "03" } } }));
+      return new Response(JSON.stringify({ response: { header: { resultCode: "00" }, body: { items: { item: [
+        { fcstDate: "20260629", fcstTime: "0900", category: "TMP", fcstValue: "20" },
+      ] } } } }));
+    }));
+    const w = await fetchWeather("k", 59, 126, KST7);
+    expect(calls.some((u) => u.includes("base_time=0500"))).toBe(true);
+    expect(calls.some((u) => u.includes("base_time=0200"))).toBe(true);
+    expect(w.hourly["0900"]).toBe(20);
+  });
+
+  it("일시 오류(JSON 아님) 후 재시도로 성공", async () => {
+    let n = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      if (n++ === 0) return new Response("<error/>"); // 첫 호출 장애
+      return new Response(JSON.stringify({ response: { header: { resultCode: "00" }, body: { items: { item: [
+        { fcstDate: "20260629", fcstTime: "0900", category: "TMP", fcstValue: "21" },
+      ] } } } }));
+    }));
+    const w = await fetchWeather("k", 59, 126, KST7);
+    expect(n).toBe(2);
+    expect(w.hourly["0900"]).toBe(21);
   });
 });

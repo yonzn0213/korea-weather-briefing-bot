@@ -9,3 +9,7 @@ kv_namespaces = [
 [triggers]
 # 0 * * * * = 매시간. 그 시각(KST)을 고른 유저 브리핑 + 실시간 비 알람(옵트인)을 함께 처리.
 crons = ["0 * * * *"]
+
+# 로그 보존(기본 3일). console.warn/error로 남긴 재시도·폴백·실패 내역을 대시보드에서 사후 조회.
+[observability]
+enabled = true

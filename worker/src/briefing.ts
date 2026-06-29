@@ -79,19 +79,84 @@ export function parseWeatherItems(items: any[], today: string): Weather {
   return data;
 }
 
-export async function fetchWeather(key: string, nx: number, ny: number, now: Date): Promise<Weather> {
-  const kst = toKst(now);
-  const [baseDate, baseTime] = baseDateTime(kst);
-  const today = ymd(kst);
+// data.go.kr 기상청 API는 평소 정상이어도 산발적으로 일시 오류(빈 응답·5xx·타임아웃·순간 NODATA)를
+// 낸다. 유저 수가 적어 호출량이 작으므로(=subrequest 예산 여유) 재시도로 그 블립을 흡수한다.
+const RETRY_DELAYS_MS = [400]; // 일시 블립은 보통 즉시 재호출로 해소 → 1회 재시도(총 2회 시도)
+const FCST_TIMES = ["2300", "2000", "1700", "1400", "1100", "0800", "0500", "0200"]; // 단기예보 발표시각(내림차순)
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+// 직전 발표회차. 0500 → 같은날 0200, 2300 → 같은날 2000, 0200 → 전날 2300.
+export function prevAnnounce(baseDate: string, baseTime: string): [string, string] {
+  const idx = FCST_TIMES.indexOf(baseTime);
+  if (idx === -1 || idx === FCST_TIMES.length - 1) {
+    const t = Date.UTC(+baseDate.slice(0, 4), +baseDate.slice(4, 6) - 1, +baseDate.slice(6, 8)) - 24 * 3600 * 1000;
+    return [ymd(new Date(t)), "2300"];
+  }
+  return [baseDate, FCST_TIMES[idx + 1]];
+}
+
+// data.go.kr 단기예보류 응답을 안전 파싱.
+//  - 정상: item 배열 반환(단일 객체면 배열로 감싼다)
+//  - NODATA(resultCode "03"): null 반환(폴백 신호 — 일시 오류와 구분)
+//  - 그 외(HTTP 오류·JSON 아님(한도초과/장애)·에러코드): throw → 호출부에서 재시도
+// header 없는 응답(테스트 목)은 에러코드 검사를 건너뛰고 items만 추출한다.
+export async function fetchKmaItems(url: string): Promise<any[] | null> {
+  const r = await fetch(url);
+  const text = await r.text();
+  if (!r.ok) throw new Error(`HTTP ${r.status} ${text.slice(0, 160)}`);
+  let j: any;
+  try { j = JSON.parse(text); }
+  catch { throw new Error(`JSON 아님(한도초과/장애 의심): ${text.slice(0, 160)}`); }
+  const code = j?.response?.header?.resultCode;
+  if (code === "03") return null;
+  if (code && code !== "00") throw new Error(`resultCode ${code}: ${j?.response?.header?.resultMsg ?? ""}`);
+  const item = j?.response?.body?.items?.item;
+  return Array.isArray(item) ? item : item != null ? [item] : [];
+}
+
+// fn이 throw하면 짧은 백오프 후 재시도. 마지막까지 실패하면 마지막 에러를 던진다.
+export async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    try { return await fn(); }
+    catch (e) {
+      lastErr = e;
+      if (attempt < RETRY_DELAYS_MS.length) {
+        console.warn(`[retry ${label}] ${attempt + 1}차 실패, 재시도: ${e instanceof Error ? e.message : e}`);
+        await sleep(RETRY_DELAYS_MS[attempt]);
+      }
+    }
+  }
+  throw lastErr;
+}
+
+function vilageFcstUrl(key: string, nx: number, ny: number, baseDate: string, baseTime: string): string {
   const url = new URL("https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst");
   url.search = new URLSearchParams({
     serviceKey: key, numOfRows: "1000", pageNo: "1", dataType: "JSON",
     base_date: baseDate, base_time: baseTime, nx: String(nx), ny: String(ny),
   }).toString();
-  const r = await fetch(url.toString());
-  const j = (await r.json()) as any;
-  const items = (j.response.body.items.item as any[]) ?? [];
-  return parseWeatherItems(items, today);
+  return url.toString();
+}
+
+export async function fetchWeather(key: string, nx: number, ny: number, now: Date): Promise<Weather> {
+  const kst = toKst(now);
+  const today = ymd(kst);
+  const [baseDate, baseTime] = baseDateTime(kst);
+  const label = `weather ${nx},${ny}`;
+
+  // 1차: 현재 발표분(일시 오류는 재시도로 흡수)
+  let items = await withRetry(() => fetchKmaItems(vilageFcstUrl(key, nx, ny, baseDate, baseTime)), label);
+
+  // NODATA면 직전 발표분으로 폴백(이른 시각에 아직 제공 안 된 격자 구제)
+  if (items === null) {
+    const [fbDate, fbTime] = prevAnnounce(baseDate, baseTime);
+    console.warn(`[${label}] ${baseDate} ${baseTime} NODATA → ${fbDate} ${fbTime} 폴백`);
+    items = await withRetry(() => fetchKmaItems(vilageFcstUrl(key, nx, ny, fbDate, fbTime)), `${label} 폴백`);
+  }
+
+  return parseWeatherItems(items ?? [], today);
 }
 
 export async function fetchDust(key: string, sidoName: string): Promise<Dust> {
@@ -99,9 +164,17 @@ export async function fetchDust(key: string, sidoName: string): Promise<Dust> {
   url.search = new URLSearchParams({
     serviceKey: key, returnType: "json", numOfRows: "1000", pageNo: "1", sidoName, ver: "1.0",
   }).toString();
-  const r = await fetch(url.toString());
-  const j = (await r.json()) as any;
-  const items = j.response.body.items as any[];
+  const items = await withRetry(async () => {
+    const r = await fetch(url.toString());
+    const text = await r.text();
+    if (!r.ok) throw new Error(`HTTP ${r.status} ${text.slice(0, 160)}`);
+    let j: any;
+    try { j = JSON.parse(text); }
+    catch { throw new Error(`JSON 아님(한도초과/장애 의심): ${text.slice(0, 160)}`); }
+    const code = j?.response?.header?.resultCode;
+    if (code && code !== "00" && code !== "03") throw new Error(`resultCode ${code}: ${j?.response?.header?.resultMsg ?? ""}`);
+    return (j?.response?.body?.items as any[]) ?? [];
+  }, `dust ${sidoName}`);
   const stations: Record<string, DustVal> = {};
   const pm10s: number[] = [], pm25s: number[] = [];
   for (const it of items) {

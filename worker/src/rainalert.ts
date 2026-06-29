@@ -2,7 +2,7 @@ import type { Env } from "./types";
 import { REGIONS } from "./regions";
 import { listUsers, putUser } from "./store";
 import { sendMessage } from "./telegram";
-import { toKst, ymd } from "./briefing";
+import { toKst, ymd, fetchKmaItems, withRetry } from "./briefing";
 
 // 초단기예보(getUltraSrtFcst) 기반 실시간 비 알람.
 // 매시간 cron에서 옵트인 유저의 등록 지역을 점검해 곧 비가 오면 미리 알린다.
@@ -101,10 +101,9 @@ export async function fetchUltraShort(key: string, nx: number, ny: number, now: 
     serviceKey: key, numOfRows: "300", pageNo: "1", dataType: "JSON",
     base_date: baseDate, base_time: baseTime, nx: String(nx), ny: String(ny),
   }).toString();
-  const r = await fetch(url.toString());
-  const j = (await r.json()) as any;
-  const items = (j.response.body.items.item as any[]) ?? [];
-  return parseUltraItems(items, today);
+  // 일시 오류는 재시도로 흡수. NODATA(null)면 빈 배열 → 이번 회차 알림 없음(보수적).
+  const items = await withRetry(() => fetchKmaItems(url.toString()), `ultra ${nx},${ny}`);
+  return parseUltraItems(items ?? [], today);
 }
 
 // "YYYYMMDDHH"
